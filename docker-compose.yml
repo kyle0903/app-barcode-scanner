@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 資料庫
+  db:
+    image: postgres:15-alpine
+    container_name: barcode_scanner_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: barcode_scanner_db
+      POSTGRES_USER: barcode_user
+      POSTGRES_PASSWORD: barcode_password
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - barcode_network
+
+  # FastAPI 後端應用程式
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: barcode_scanner_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://barcode_user:barcode_password@db:5432/barcode_scanner_db
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: barcode_scanner_db
+      POSTGRES_USER: barcode_user
+      POSTGRES_PASSWORD: barcode_password
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    networks:
+      - barcode_network
+    volumes:
+      - ./backend:/app
+    command: >
+      sh -c "python database.py && 
+             uvicorn app:app --host 0.0.0.0 --port 8000 --reload"
+
+networks:
+  barcode_network:
+    driver: bridge
