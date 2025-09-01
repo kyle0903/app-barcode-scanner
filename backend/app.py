@@ -1,19 +1,17 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import Column, Integer, String, DateTime, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Optional
 import os
 from dotenv import load_dotenv
 import pytz
-import asyncio
-from threading import Lock
 import time
-
-from typing import Set
+import pandas as pd
+from io import BytesIO
 
 # 載入環境變數
 load_dotenv()
@@ -28,56 +26,12 @@ def get_taipei_time():
 # 並發控制：防止重複掃描
 recent_scans = {}  # 記住最近的掃描時間
 
-# 條碼快取：將所有條碼載入記憶體提升查詢效率
-barcode_cache: Set[str] = set()
-cache_lock = Lock()
-cache_last_updated = 0  # 快取最後更新時間
-
 def cleanup_recent_scans():
     """清理過期的掃描記錄"""
     current_time = time.time()
     expired_keys = [k for k, v in recent_scans.items() if current_time - v > 2]
     for key in expired_keys:
         recent_scans.pop(key, None)
-
-def refresh_barcode_cache(db: Session):
-    """重新載入條碼快取"""
-    global barcode_cache, cache_last_updated
-    
-    with cache_lock:
-        # 從資料庫載入所有條碼
-        barcodes = db.query(Barcode.code).all()
-        barcode_cache = {barcode.code for barcode in barcodes}
-        cache_last_updated = time.time()
-        print(f"條碼快取已更新，共載入 {len(barcode_cache)} 個條碼")
-
-def is_cache_valid() -> bool:
-    """檢查快取是否需要更新（每5分鐘自動更新一次）"""
-    return time.time() - cache_last_updated < 300  # 5分鐘
-
-def is_barcode_in_cache(code: str, db: Session) -> bool:
-    """檢查條碼是否在快取中（如果快取過期會自動更新）"""
-    if not is_cache_valid():
-        refresh_barcode_cache(db)
-    
-    return code in barcode_cache
-
-def add_to_cache(code: str):
-    """新增條碼到快取"""
-    with cache_lock:
-        barcode_cache.add(code)
-
-def remove_from_cache(code: str):
-    """從快取中移除條碼"""
-    with cache_lock:
-        barcode_cache.discard(code)
-
-def clear_cache():
-    """清空快取"""
-    with cache_lock:
-        barcode_cache.clear()
-        global cache_last_updated
-        cache_last_updated = 0
 
 app = FastAPI(title="Barcode Scanner API", description="條碼掃描系統 API", version="1.0.0")
 
@@ -136,6 +90,13 @@ class BarcodesBulkCreate(BaseModel):
 class ScanRequest(BaseModel):
     code: str
 
+class BarcodeSearchRequest(BaseModel):
+    codes: List[str]
+
+class DateRangeRequest(BaseModel):
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+
 class ScanResponse(BaseModel):
     result: str
     message: str
@@ -159,6 +120,11 @@ class StatsResponse(BaseModel):
 class MessageResponse(BaseModel):
     message: str
 
+class DownloadExcelRequest(BaseModel):
+    class Config:
+        from_attributes = True
+    data: List[BarcodeResponse]
+
 # 資料庫依賴注入
 def get_db():
     db = SessionLocal()
@@ -171,7 +137,39 @@ def get_db():
 @app.get("/api/barcodes", response_model=List[BarcodeResponse])
 def get_barcodes(db: Session = Depends(get_db)):
     """獲取所有條碼"""
-    barcodes = db.query(Barcode).all()
+    barcodes = db.query(Barcode).limit(500).all()
+    return barcodes
+
+@app.post("/api/barcodes/search", response_model=List[BarcodeResponse])
+def search_barcodes(search_request: BarcodeSearchRequest, db: Session = Depends(get_db)):
+    """多筆條碼查詢"""
+    if not search_request.codes:
+        return []
+    
+    # 移除空白和重複的條碼
+    codes = list(set([code.strip() for code in search_request.codes if code.strip()]))
+    
+    barcodes = db.query(Barcode).filter(Barcode.code.in_(codes)).all()
+    return barcodes
+
+@app.post("/api/barcodes/date-range", response_model=List[BarcodeResponse])
+def get_barcodes_by_date_range(date_request: DateRangeRequest, db: Session = Depends(get_db)):
+    """依日期範圍查詢條碼"""
+    query = db.query(Barcode)
+    
+    if date_request.start_date:
+        # 將日期轉換為該日的開始時間
+        start_datetime = datetime.combine(date_request.start_date, datetime.min.time())
+        start_datetime = TAIPEI_TZ.localize(start_datetime)
+        query = query.filter(Barcode.upload_time >= start_datetime)
+    
+    if date_request.end_date:
+        # 將日期轉換為該日的結束時間
+        end_datetime = datetime.combine(date_request.end_date, datetime.max.time())
+        end_datetime = TAIPEI_TZ.localize(end_datetime)
+        query = query.filter(Barcode.upload_time <= end_datetime)
+    
+    barcodes = query.order_by(Barcode.upload_time.desc()).all()
     return barcodes
 
 @app.post("/api/barcodes", response_model=BarcodeResponse)
@@ -187,9 +185,6 @@ def add_barcode(barcode_data: BarcodeCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(barcode)
     
-    # 同步更新快取
-    add_to_cache(barcode_data.code)
-    
     return barcode
 
 @app.post("/api/barcodes/bulk", response_model=MessageResponse)
@@ -200,40 +195,28 @@ def upload_barcodes(barcodes_data: BarcodesBulkCreate, db: Session = Depends(get
     
     added_count = 0
     duplicate_count = 0
-    new_codes = []
     
     for code in barcodes_data.codes:
         if code and not db.query(Barcode).filter(Barcode.code == code).first():
             barcode = Barcode(code=code)
             db.add(barcode)
-            new_codes.append(code)
             added_count += 1
         else:
             duplicate_count += 1
     
     db.commit()
     
-    # 批量更新快取
-    for code in new_codes:
-        add_to_cache(code)
-    
     return MessageResponse(message=f"成功新增 {added_count} 個條碼，重複 {duplicate_count} 個條碼")
 
-@app.delete("/api/barcodes/{barcode_id}", response_model=MessageResponse)
+@app.delete("/api/barcodes/id/{barcode_id}", response_model=MessageResponse)
 def delete_barcode(barcode_id: int, db: Session = Depends(get_db)):
     """刪除條碼"""
     barcode = db.query(Barcode).filter(Barcode.id == barcode_id).first()
     if not barcode:
         raise HTTPException(status_code=404, detail="條碼不存在")
     
-    # 記住要刪除的條碼代碼
-    code_to_remove = barcode.code
-    
     db.delete(barcode)
     db.commit()
-    
-    # 從快取中移除
-    remove_from_cache(code_to_remove)
     
     return MessageResponse(message="條碼已刪除")
 
@@ -244,21 +227,18 @@ def clear_all_barcodes(db: Session = Depends(get_db)):
     db.query(ScanHistory).delete()
     db.commit()
     
-    # 清空快取
-    clear_cache()
-    
     return MessageResponse(message="所有資料已清空")
 
 @app.post("/api/scan", response_model=ScanResponse)
 def scan_barcode(scan_data: ScanRequest, db: Session = Depends(get_db)):
-    """掃描條碼驗證 - 帶並發控制"""
+    """掃描條碼驗證"""
     code = scan_data.code
     current_timestamp = time.time()
     
     # 清理過期記錄
     cleanup_recent_scans()
     
-    # 快速重複檢查（記憶體級別，不依賴資料庫）
+    # 快速重複檢查
     if code in recent_scans:
         time_diff = current_timestamp - recent_scans[code]
         if time_diff < 0.5:  # 500ms 內的重複掃描直接拒絕
@@ -272,10 +252,11 @@ def scan_barcode(scan_data: ScanRequest, db: Session = Depends(get_db)):
     recent_scans[code] = current_timestamp
     
     try:
-        # 使用快取進行快速條碼查詢
-        if is_barcode_in_cache(code, db):
-            # 條碼在快取中存在，再從資料庫獲取詳細資訊（用於更新掃描計數）
-            barcode = db.query(Barcode).filter(Barcode.code == code).first()
+        # 直接查詢資料庫檢查條碼是否存在
+        barcode = db.query(Barcode).filter(Barcode.code == code).first()
+        
+        if barcode:
+            # 條碼存在，檢查是否重複掃描
             current_time = get_taipei_time()
             from datetime import timedelta
             one_second_ago = current_time - timedelta(seconds=1)
@@ -296,24 +277,21 @@ def scan_barcode(scan_data: ScanRequest, db: Session = Depends(get_db)):
             barcode.scan_count += 1
             barcode.last_scan_time = current_time
             
-            # 背景記錄掃描歷史
+            # 記錄掃描歷史
             scan = ScanHistory(barcode=code, result='success', timestamp=current_time)
             db.add(scan)
             db.commit()
             
-            # 立即返回結果
-            result = ScanResponse(
+            # 返回成功結果
+            return ScanResponse(
                 result="success",
                 message="✅ 收單確認",
                 barcode=code,
                 scan_count=barcode.scan_count
             )
             
-            return result
-            
         else:
-            # 條碼不在快取中，直接返回錯誤（避免不必要的資料庫查詢）
-            # 記錄失敗的掃描
+            # 條碼不存在，記錄失敗的掃描
             current_time = get_taipei_time()
             scan = ScanHistory(barcode=code, result='error', timestamp=current_time)
             db.add(scan)
@@ -340,7 +318,10 @@ def get_scan_history(limit: int = 10, db: Session = Depends(get_db)):
 def get_stats(db: Session = Depends(get_db)):
     """獲取統計資料"""
     total_barcodes = db.query(Barcode).count()
-    successful_scans = db.query(ScanHistory).filter(ScanHistory.result == 'success').count()
+    # 計算不重複的成功掃描條碼數量
+    successful_scans = db.query(ScanHistory.barcode).filter(
+        ScanHistory.result == 'success'
+    ).distinct().count()
     failed_scans = db.query(ScanHistory).filter(ScanHistory.result == 'error').count()
     
     return StatsResponse(
@@ -349,20 +330,22 @@ def get_stats(db: Session = Depends(get_db)):
         failed_scans=failed_scans
     )
 
-@app.post("/api/cache/refresh", response_model=MessageResponse)
-def refresh_cache(db: Session = Depends(get_db)):
-    """手動重新整理條碼快取"""
-    refresh_barcode_cache(db)
-    return MessageResponse(message=f"快取已重新整理，共載入 {len(barcode_cache)} 個條碼")
+@app.post("/api/barcodes/download")
+def download_excel(data: DownloadExcelRequest):
+    """下載excel"""
+    # 將data轉換成excel
+    download_data = data.data
+    dict_list = [item.model_dump() for item in download_data]
+    df = pd.DataFrame(dict_list)
+    output = BytesIO()
+    df.to_excel(output, index=False)
+    output.seek(0)
+    return Response(
+        content=output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=barcodes.xlsx"}
+    )
 
-@app.get("/api/cache/status")
-def get_cache_status():
-    """獲取快取狀態"""
-    return {
-        "cache_size": len(barcode_cache),
-        "last_updated": cache_last_updated,
-        "is_valid": is_cache_valid()
-    }
 
 # 創建資料庫表格
 def create_tables():
@@ -371,12 +354,6 @@ def create_tables():
 @app.on_event("startup")
 def startup_event():
     create_tables()
-    # 啟動時載入條碼快取
-    db = SessionLocal()
-    try:
-        refresh_barcode_cache(db)
-    finally:
-        db.close()
 
 if __name__ == "__main__":
     import uvicorn

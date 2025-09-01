@@ -7,9 +7,10 @@ class AudioService {
   // 初始化音效系統
   init() {
     try {
-      this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      this.audioContext = new (window.AudioContext ||
+        window.webkitAudioContext)();
     } catch (error) {
-      console.warn('音效系統初始化失敗:', error);
+      console.warn("音效系統初始化失敗:", error);
     }
   }
 
@@ -20,27 +21,30 @@ class AudioService {
     try {
       const oscillator = this.audioContext.createOscillator();
       const gainNode = this.audioContext.createGain();
-      
+
       oscillator.connect(gainNode);
       gainNode.connect(this.audioContext.destination);
-      
+
       oscillator.frequency.value = frequency;
-      oscillator.type = 'square';
-      
+      oscillator.type = "square";
+
       gainNode.gain.setValueAtTime(volume, this.audioContext.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + duration);
-      
+      gainNode.gain.exponentialRampToValueAtTime(
+        0.01,
+        this.audioContext.currentTime + duration
+      );
+
       oscillator.start(this.audioContext.currentTime);
       oscillator.stop(this.audioContext.currentTime + duration);
     } catch (error) {
-      console.warn('音效播放失敗:', error);
+      console.warn("音效播放失敗:", error);
     }
   }
 
   // 播放成功音效
   playSuccessSound() {
-    this.generateTone(600, 0.2, this.currentVolume);
-    setTimeout(() => this.generateTone(1000, 0.2, this.currentVolume), 200);
+    this.generateTone(600, 0.4, this.currentVolume);
+    setTimeout(() => this.generateTone(1000, 0.4, this.currentVolume), 100);
   }
 
   // 播放錯誤音效

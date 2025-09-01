@@ -21,9 +21,10 @@ COPY . .
 
 EXPOSE 8000
 
-COPY docker_entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker_entrypoint.sh
+COPY docker_entrypoint.sh /usr/local/bin/docker_entrypoint.sh
+RUN chmod +x /usr/local/bin/docker_entrypoint.sh && \
+    sed -i 's/\r$//' /usr/local/bin/docker_entrypoint.sh
 
-ENTRYPOINT ["docker_entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/docker_entrypoint.sh"]
 
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
