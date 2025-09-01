@@ -2,10 +2,10 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Box, Tabs, Tab } from "@mui/material";
 import Header from "./Header";
 import UploadTab from "./UploadTab";
-import ScanTab from "./ScanTab";
 import DataTab from "./DataTab";
 import { apiService } from "../services/apiService";
 import { audioService } from "../services/audioService";
+import { barcodeCache } from "../services/barcodeCache";
 
 const BarcodeScanner = () => {
   const [activeKey, setActiveKey] = useState(0);
@@ -15,7 +15,6 @@ const BarcodeScanner = () => {
     failed_scans: 0,
   });
   const [barcodes, setBarcodes] = useState([]);
-  const [scanHistory, setScanHistory] = useState([]);
 
   // 載入統計資料
   const loadStats = async () => {
@@ -32,18 +31,10 @@ const BarcodeScanner = () => {
     try {
       const data = await apiService.getBarcodes();
       setBarcodes(data);
+      // 同時更新本地快取
+      barcodeCache.initialize(data);
     } catch (error) {
       console.error("載入條碼清單失敗:", error);
-    }
-  };
-
-  // 載入掃描歷史
-  const loadScanHistory = async () => {
-    try {
-      const data = await apiService.getScanHistory(10);
-      setScanHistory(data);
-    } catch (error) {
-      console.error("載入掃描歷史失敗:", error);
     }
   };
 
@@ -51,7 +42,6 @@ const BarcodeScanner = () => {
   const loadData = useCallback(() => {
     loadStats();
     loadBarcodes();
-    loadScanHistory();
   }, []);
 
   useEffect(() => {
@@ -60,17 +50,23 @@ const BarcodeScanner = () => {
     audioService.init();
   }, [loadData]);
 
-  const handleUploadSuccess = () => {
-    loadData();
-  };
-
-  const handleScanResult = (result) => {
+  const handleUploadSuccess = (newBarcodes) => {
+    // 如果有新條碼資訊，批量加入快取
+    if (newBarcodes && newBarcodes.length > 0) {
+      barcodeCache.addBatch(newBarcodes);
+    }
     loadData();
   };
 
   const handleDeleteBarcode = async (barcodeId) => {
     try {
+      // 先找到要刪除的條碼
+      const barcodeToDelete = barcodes.find((b) => b.id === barcodeId);
       await apiService.deleteBarcode(barcodeId);
+      // 從快取中移除
+      if (barcodeToDelete) {
+        barcodeCache.remove(barcodeToDelete.code);
+      }
       loadData();
     } catch (error) {
       console.error("刪除條碼失敗:", error);
@@ -81,6 +77,8 @@ const BarcodeScanner = () => {
   const handleClearAll = async () => {
     try {
       await apiService.clearAllBarcodes();
+      // 清空快取
+      barcodeCache.clear();
       loadData();
     } catch (error) {
       console.error("清空資料失敗:", error);
@@ -113,7 +111,6 @@ const BarcodeScanner = () => {
           centered
         >
           <Tab label="資料檢視" />
-          <Tab label="掃描驗證" />
           <Tab label="上傳管理" />
         </Tabs>
       </Box>
@@ -125,10 +122,7 @@ const BarcodeScanner = () => {
           backgroundColor: "background.default",
         }}
       >
-        {activeKey === 2 && <UploadTab onUploadSuccess={handleUploadSuccess} />}
-        {activeKey === 1 && (
-          <ScanTab onScanResult={handleScanResult} scanHistory={scanHistory} />
-        )}
+        {activeKey === 1 && <UploadTab onUploadSuccess={handleUploadSuccess} />}
         {activeKey === 0 && (
           <DataTab
             barcodes={barcodes}

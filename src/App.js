@@ -1,15 +1,22 @@
-import React from 'react';
-import { ThemeProvider, createTheme } from '@mui/material/styles';
-import CssBaseline from '@mui/material/CssBaseline';
-import BarcodeScanner from './components/BarcodeScanner';
+import React from "react";
+import { ThemeProvider, createTheme } from "@mui/material/styles";
+import CssBaseline from "@mui/material/CssBaseline";
+import {
+  BrowserRouter as Router,
+  Routes,
+  Route,
+  Navigate,
+} from "react-router-dom";
+import BarcodeScanner from "./components/BarcodeScanner";
+import ScanPage from "./components/ScanPage";
 
 const theme = createTheme({
   palette: {
     primary: {
-      main: '#3498db',
+      main: "#3498db",
     },
     secondary: {
-      main: '#2ecc71',
+      main: "#2ecc71",
     },
   },
   typography: {
@@ -21,7 +28,13 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <BarcodeScanner />
+      <Router>
+        <Routes>
+          <Route path="/" element={<BarcodeScanner />} />
+          <Route path="/scanner" element={<ScanPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Router>
     </ThemeProvider>
   );
 }

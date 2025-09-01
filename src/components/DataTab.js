@@ -271,7 +271,7 @@ const DataTab = ({ barcodes, stats, onDeleteBarcode, onClearAll }) => {
                       zIndex: 1,
                     }}
                   >
-                    總錯單筆數
+                    總收單筆數
                   </Typography>
                 </StatItem>
               </Grid>
@@ -299,35 +299,7 @@ const DataTab = ({ barcodes, stats, onDeleteBarcode, onClearAll }) => {
                       zIndex: 1,
                     }}
                   >
-                    已收單筆數
-                  </Typography>
-                </StatItem>
-              </Grid>
-              <Grid item xs={12} md={4}>
-                <StatItem>
-                  <Typography
-                    variant="h3"
-                    component="div"
-                    sx={{
-                      fontSize: { xs: "2rem", md: "2.5rem" },
-                      fontWeight: "bold",
-                      marginBottom: 1,
-                      position: "relative",
-                      zIndex: 1,
-                    }}
-                  >
-                    {stats?.failed_scans || 0}
-                  </Typography>
-                  <Typography
-                    variant="body1"
-                    sx={{
-                      fontSize: { xs: "0.875rem", md: "1rem" },
-                      opacity: 0.9,
-                      position: "relative",
-                      zIndex: 1,
-                    }}
-                  >
-                    掃描失敗筆數
+                    已掃描筆數
                   </Typography>
                 </StatItem>
               </Grid>
