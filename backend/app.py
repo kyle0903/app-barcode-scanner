@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException, Depends, Response
+from fastapi import FastAPI, HTTPException, Depends, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import Column, Integer, String, DateTime, create_engine
+from sqlalchemy import Column, Integer, String, DateTime, Float, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ import pytz
 import time
 import pandas as pd
 from io import BytesIO
+import json
 
 # 載入環境變數
 load_dotenv()
@@ -44,6 +45,69 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# # API 日誌記錄中間件
+# @app.middleware("http")
+# async def log_api_calls(request: Request, call_next):
+#     start_time = time.time()
+    
+#     # 獲取請求資訊
+#     method = request.method
+#     endpoint = str(request.url.path)
+#     client_ip = request.client.host if request.client else "unknown"
+#     user_agent = request.headers.get("user-agent", "unknown")
+    
+#     # 獲取請求資料
+#     request_data = {}
+#     if method in ["POST", "PUT", "PATCH"]:
+#         try:
+#             # 讀取 body 並重新設置，避免消耗掉請求資料
+#             body = await request.body()
+#             if body:
+#                 request_data = json.loads(body.decode())
+#                 # 重新設置 request 的 body，讓後續處理可以讀取
+#                 async def receive():
+#                     return {"type": "http.request", "body": body}
+#                 request._receive = receive
+#         except:
+#             request_data = {"raw_body": "無法解析"}
+    
+#     # 執行請求
+#     response = await call_next(request)
+    
+#     # 計算執行時間
+#     execution_time = (time.time() - start_time) * 1000  # 轉換為毫秒
+    
+#     # 獲取回應資料
+#     response_data = {}
+#     if hasattr(response, 'body'):
+#         try:
+#             response_body = response.body
+#             if response_body:
+#                 response_data = json.loads(response_body.decode())
+#         except:
+#             response_data = {"raw_body": "無法解析"}
+    
+#     # 記錄到資料庫
+#     try:
+#         db = SessionLocal()
+#         api_log = ApiLog(
+#             method=method,
+#             endpoint=endpoint,
+#             request_data=json.dumps(request_data, ensure_ascii=False) if request_data else None,
+#             response_status=response.status_code,
+#             response_data=json.dumps(response_data, ensure_ascii=False) if response_data else None,
+#             client_ip=client_ip,
+#             user_agent=user_agent,
+#             execution_time=execution_time
+#         )
+#         db.add(api_log)
+#         db.commit()
+#         db.close()
+#     except Exception as e:
+#         print(f"API 日誌記錄失敗: {e}")
+    
+#     return response
+
 # 資料庫配置
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -68,6 +132,21 @@ class ScanHistory(Base):
     id = Column(Integer, primary_key=True, index=True)
     barcode = Column(String(100), nullable=False)
     result = Column(String(20), nullable=False)
+    timestamp = Column(DateTime, nullable=False, default=get_taipei_time)
+
+# API 日誌表
+class ApiLog(Base):
+    __tablename__ = "api_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    method = Column(String(10), nullable=False)  # GET, POST, PUT, DELETE
+    endpoint = Column(String(255), nullable=False)  # API 端點
+    request_data = Column(String(1000))  # 請求資料 (JSON 字串)
+    response_status = Column(Integer, nullable=False)  # HTTP 狀態碼
+    response_data = Column(String(1000))  # 回應資料 (JSON 字串)
+    client_ip = Column(String(45))  # 客戶端 IP
+    user_agent = Column(String(500))  # 用戶代理
+    execution_time = Column(Float)  # 執行時間 (毫秒)
     timestamp = Column(DateTime, nullable=False, default=get_taipei_time)
 
 # Pydantic 模型
@@ -125,6 +204,15 @@ class DownloadExcelRequest(BaseModel):
         from_attributes = True
     data: List[BarcodeResponse]
 
+class OfflineScanRecord(BaseModel):
+    barcode: str
+    result: str
+    message: str
+    timestamp: str
+
+class OfflineSyncRequest(BaseModel):
+    records: List[OfflineScanRecord]
+
 # 資料庫依賴注入
 def get_db():
     db = SessionLocal()
@@ -132,6 +220,31 @@ def get_db():
         yield db
     finally:
         db.close()
+
+@app.get("/api/health")
+def health_check():
+    """健康檢查"""
+    return {"status": "ok"}
+
+@app.get("/api/logs", response_model=List[dict])
+def get_api_logs(limit: int = 100, db: Session = Depends(get_db)):
+    """獲取 API 日誌"""
+    logs = db.query(ApiLog).order_by(ApiLog.timestamp.desc()).limit(limit).all()
+    return [
+        {
+            "id": log.id,
+            "method": log.method,
+            "endpoint": log.endpoint,
+            "request_data": json.loads(log.request_data) if log.request_data else None,
+            "response_status": log.response_status,
+            "response_data": json.loads(log.response_data) if log.response_data else None,
+            "client_ip": log.client_ip,
+            "execution_time": log.execution_time/1000,
+            "timestamp": log.timestamp
+        }
+        for log in logs
+    ]
+    
 
 # API 路由
 @app.get("/api/barcodes", response_model=List[BarcodeResponse])
@@ -187,26 +300,40 @@ def add_barcode(barcode_data: BarcodeCreate, db: Session = Depends(get_db)):
     
     return barcode
 
-@app.post("/api/barcodes/bulk", response_model=MessageResponse)
+@app.post("/api/barcodes/bulk")
 def upload_barcodes(barcodes_data: BarcodesBulkCreate, db: Session = Depends(get_db)):
     """批量上傳條碼"""
     if not barcodes_data.codes:
         raise HTTPException(status_code=400, detail="沒有提供條碼")
     
-    added_count = 0
-    duplicate_count = 0
+    added_barcodes = []
+    duplicate_barcodes = []
     
     for code in barcodes_data.codes:
         if code and not db.query(Barcode).filter(Barcode.code == code).first():
             barcode = Barcode(code=code)
             db.add(barcode)
-            added_count += 1
+            added_barcodes.append(code)
         else:
-            duplicate_count += 1
+            duplicate_barcodes.append(code)
     
     db.commit()
     
-    return MessageResponse(message=f"成功新增 {added_count} 個條碼，重複 {duplicate_count} 個條碼")
+    # 構建詳細的訊息
+    total_count = len(barcodes_data.codes)
+    added_count = len(added_barcodes)
+    duplicate_count = len(duplicate_barcodes)
+    
+    message = f"上傳完成！總共 {total_count} 個條碼，成功新增 {added_count} 個條碼，重複 {duplicate_count} 個條碼"
+    
+    return {
+        "message": message,
+        "total": total_count,
+        "added_count": added_count,
+        "duplicate_count": duplicate_count,
+        "added_barcodes": added_barcodes,
+        "duplicate_barcodes": duplicate_barcodes
+    }
 
 @app.delete("/api/barcodes/id/{barcode_id}", response_model=MessageResponse)
 def delete_barcode(barcode_id: int, db: Session = Depends(get_db)):
@@ -269,7 +396,7 @@ def scan_barcode(scan_data: ScanRequest, db: Session = Depends(get_db)):
             if recent_scan:
                 return ScanResponse(
                     result="duplicate", 
-                    message="重複掃描！請勿重複操作",
+                    message="⚠️收單已確認",
                     barcode=code
                 )
             
@@ -345,6 +472,69 @@ def download_excel(data: DownloadExcelRequest):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=barcodes.xlsx"}
     )
+
+@app.post("/api/offline-sync", response_model=MessageResponse)
+def sync_offline_records(sync_request: OfflineSyncRequest, db: Session = Depends(get_db)):
+    """同步離線掃描記錄"""
+    if not sync_request.records:
+        return MessageResponse(message="沒有需要同步的記錄")
+    
+    synced_count = 0
+    error_count = 0
+    
+    try:
+        for record in sync_request.records:
+            try:
+                # 解析時間戳
+                from datetime import datetime
+                import pytz
+                
+                # 嘗試解析 ISO 格式時間戳
+                if record.timestamp.endswith('Z'):
+                    # UTC 時間
+                    timestamp = datetime.fromisoformat(record.timestamp.replace('Z', '+00:00'))
+                    # 轉換為台北時間
+                    taipei_tz = pytz.timezone('Asia/Taipei')
+                    timestamp = timestamp.astimezone(taipei_tz)
+                else:
+                    # 假設是台北時間
+                    timestamp = datetime.fromisoformat(record.timestamp)
+                    if timestamp.tzinfo is None:
+                        taipei_tz = pytz.timezone('Asia/Taipei')
+                        timestamp = taipei_tz.localize(timestamp)
+                
+                # 創建掃描歷史記錄
+                scan_history = ScanHistory(
+                    barcode=record.barcode,
+                    result=record.result,
+                    timestamp=timestamp
+                )
+                db.add(scan_history)
+                
+                # 如果是成功掃描，更新條碼的掃描次數
+                if record.result == 'success' or record.result == 'duplicate':
+                    barcode = db.query(Barcode).filter(Barcode.code == record.barcode).first()
+                    if barcode:
+                        barcode.scan_count += 1
+                        barcode.last_scan_time = timestamp
+                
+                synced_count += 1
+                
+            except Exception as e:
+                print(f"同步記錄失敗: {record.barcode}, 錯誤: {e}")
+                error_count += 1
+                continue
+        
+        # 提交所有變更
+        db.commit()
+        
+        return MessageResponse(
+            message=f"同步完成：成功 {synced_count} 條，失敗 {error_count} 條"
+        )
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"同步失敗: {str(e)}")
 
 
 # 創建資料庫表格

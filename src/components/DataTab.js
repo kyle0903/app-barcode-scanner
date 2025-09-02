@@ -329,7 +329,7 @@ const DataTab = ({ barcodes, stats, onDeleteBarcode, onClearAll }) => {
                   <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                     <FilterList color="action" />
                     <Typography variant="h6" component="h4">
-                      錯單查詢
+                      收單查詢
                     </Typography>
                     {searchMessage && (
                       <Chip
@@ -494,7 +494,7 @@ const DataTab = ({ barcodes, stats, onDeleteBarcode, onClearAll }) => {
         }}
       >
         <Typography variant="h6" component="h4">
-          錯單資料列表
+          收單資料列表
         </Typography>
 
         {filteredBarcodes.length > 0 && (
@@ -668,7 +668,7 @@ const DataTab = ({ barcodes, stats, onDeleteBarcode, onClearAll }) => {
                     </TableCell>
                   )}
                   <TableCell>
-                    <strong>掃描次數</strong>
+                    <strong>被掃描次數</strong>
                   </TableCell>
                   {!isTablet && (
                     <TableCell>

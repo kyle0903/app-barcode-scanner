@@ -16,17 +16,10 @@ export const apiService = {
     return response.data;
   },
 
-  // 新增單個條碼
-  addBarcode: async (code) => {
-    try {
-      const response = await api.post("/barcodes", { code });
-      return response.data;
-    } catch (error) {
-      if (error.response && error.response.data && error.response.data.detail) {
-        throw new Error(error.response.data.detail);
-      }
-      throw new Error("新增條碼失敗");
-    }
+  // 健康檢查
+  healthCheck: async () => {
+    const response = await api.get("/health");
+    return response.data;
   },
 
   // 批量上傳條碼
@@ -75,7 +68,7 @@ export const apiService = {
   },
 
   // 獲取掃描歷史
-  getScanHistory: async (limit = 10) => {
+  getScanHistory: async (limit = 100) => {
     const response = await api.get(`/scan-history?limit=${limit}`);
     return response.data;
   },
@@ -111,5 +104,16 @@ export const apiService = {
       }
     );
     return response.data;
+  },
+
+  // 同步離線掃描記錄
+  syncOfflineRecords: async (records) => {
+    try {
+      const response = await api.post("/offline-sync", { records });
+      return response.data;
+    } catch (error) {
+      console.error("同步離線記錄失敗:", error);
+      throw error;
+    }
   },
 };

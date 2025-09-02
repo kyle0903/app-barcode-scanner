@@ -5,7 +5,6 @@ import UploadTab from "./UploadTab";
 import DataTab from "./DataTab";
 import { apiService } from "../services/apiService";
 import { audioService } from "../services/audioService";
-import { barcodeCache } from "../services/barcodeCache";
 
 const BarcodeScanner = () => {
   const [activeKey, setActiveKey] = useState(0);
@@ -31,8 +30,6 @@ const BarcodeScanner = () => {
     try {
       const data = await apiService.getBarcodes();
       setBarcodes(data);
-      // 同時更新本地快取
-      barcodeCache.initialize(data);
     } catch (error) {
       console.error("載入條碼清單失敗:", error);
     }
@@ -50,23 +47,13 @@ const BarcodeScanner = () => {
     audioService.init();
   }, [loadData]);
 
-  const handleUploadSuccess = (newBarcodes) => {
-    // 如果有新條碼資訊，批量加入快取
-    if (newBarcodes && newBarcodes.length > 0) {
-      barcodeCache.addBatch(newBarcodes);
-    }
+  const handleUploadSuccess = () => {
     loadData();
   };
 
   const handleDeleteBarcode = async (barcodeId) => {
     try {
-      // 先找到要刪除的條碼
-      const barcodeToDelete = barcodes.find((b) => b.id === barcodeId);
       await apiService.deleteBarcode(barcodeId);
-      // 從快取中移除
-      if (barcodeToDelete) {
-        barcodeCache.remove(barcodeToDelete.code);
-      }
       loadData();
     } catch (error) {
       console.error("刪除條碼失敗:", error);
@@ -77,8 +64,6 @@ const BarcodeScanner = () => {
   const handleClearAll = async () => {
     try {
       await apiService.clearAllBarcodes();
-      // 清空快取
-      barcodeCache.clear();
       loadData();
     } catch (error) {
       console.error("清空資料失敗:", error);
