@@ -46,68 +46,68 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# # API 日誌記錄中間件
-# @app.middleware("http")
-# async def log_api_calls(request: Request, call_next):
-#     start_time = time.time()
+# API 日誌記錄中間件
+@app.middleware("http")
+async def log_api_calls(request: Request, call_next):
+    start_time = time.time()
     
-#     # 獲取請求資訊
-#     method = request.method
-#     endpoint = str(request.url.path)
-#     client_ip = request.client.host if request.client else "unknown"
-#     user_agent = request.headers.get("user-agent", "unknown")
+    # 獲取請求資訊
+    method = request.method
+    endpoint = str(request.url.path)
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
     
-#     # 獲取請求資料
-#     request_data = {}
-#     if method in ["POST", "PUT", "PATCH"]:
-#         try:
-#             # 讀取 body 並重新設置，避免消耗掉請求資料
-#             body = await request.body()
-#             if body:
-#                 request_data = json.loads(body.decode())
-#                 # 重新設置 request 的 body，讓後續處理可以讀取
-#                 async def receive():
-#                     return {"type": "http.request", "body": body}
-#                 request._receive = receive
-#         except:
-#             request_data = {"raw_body": "無法解析"}
+    # 獲取請求資料
+    request_data = {}
+    if method in ["POST", "PUT", "PATCH"]:
+        try:
+            # 讀取 body 並重新設置，避免消耗掉請求資料
+            body = await request.body()
+            if body:
+                request_data = json.loads(body.decode())
+                # 重新設置 request 的 body，讓後續處理可以讀取
+                async def receive():
+                    return {"type": "http.request", "body": body}
+                request._receive = receive
+        except:
+            request_data = {"raw_body": "無法解析"}
     
-#     # 執行請求
-#     response = await call_next(request)
+    # 執行請求
+    response = await call_next(request)
     
-#     # 計算執行時間
-#     execution_time = (time.time() - start_time) * 1000  # 轉換為毫秒
+    # 計算執行時間
+    execution_time = round(time.time() - start_time, 3)  # 轉換為毫秒
     
-#     # 獲取回應資料
-#     response_data = {}
-#     if hasattr(response, 'body'):
-#         try:
-#             response_body = response.body
-#             if response_body:
-#                 response_data = json.loads(response_body.decode())
-#         except:
-#             response_data = {"raw_body": "無法解析"}
+    # 獲取回應資料
+    response_data = {}
+    if hasattr(response, 'body'):
+        try:
+            response_body = response.body
+            if response_body:
+                response_data = json.loads(response_body.decode())
+        except:
+            response_data = {"raw_body": "無法解析"}
     
-#     # 記錄到資料庫
-#     try:
-#         db = SessionLocal()
-#         api_log = ApiLog(
-#             method=method,
-#             endpoint=endpoint,
-#             request_data=json.dumps(request_data, ensure_ascii=False) if request_data else None,
-#             response_status=response.status_code,
-#             response_data=json.dumps(response_data, ensure_ascii=False) if response_data else None,
-#             client_ip=client_ip,
-#             user_agent=user_agent,
-#             execution_time=execution_time
-#         )
-#         db.add(api_log)
-#         db.commit()
-#         db.close()
-#     except Exception as e:
-#         print(f"API 日誌記錄失敗: {e}")
+    # 記錄到資料庫
+    try:
+        db = SessionLocal()
+        api_log = ApiLog(
+            method=method,
+            endpoint=endpoint,
+            request_data=json.dumps(request_data, ensure_ascii=False) if request_data else None,
+            response_status=response.status_code,
+            response_data=json.dumps(response_data, ensure_ascii=False) if response_data else None,
+            client_ip=client_ip,
+            user_agent=user_agent,
+            execution_time=execution_time
+        )
+        db.add(api_log)
+        db.commit()
+        db.close()
+    except Exception as e:
+        print(f"API 日誌記錄失敗: {e}")
     
-#     return response
+    return response
 
 # 資料庫配置
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -240,7 +240,7 @@ def get_api_logs(limit: int = 100, db: Session = Depends(get_db)):
             "response_status": log.response_status,
             "response_data": json.loads(log.response_data) if log.response_data else None,
             "client_ip": log.client_ip,
-            "execution_time": log.execution_time/1000,
+            "execution_time": log.execution_time,
             "timestamp": log.timestamp
         }
         for log in logs
@@ -459,20 +459,141 @@ def get_stats(db: Session = Depends(get_db)):
     )
 
 @app.post("/api/barcodes/download")
-def download_excel(data: DownloadExcelRequest):
-    """下載excel"""
-    # 將data轉換成excel
-    download_data = data.data
-    dict_list = [item.model_dump() for item in download_data]
-    df = pd.DataFrame(dict_list)
-    output = BytesIO()
-    df.to_excel(output, index=False)
-    output.seek(0)
-    return Response(
-        content=output.getvalue(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=barcodes.xlsx"}
-    )
+def download_excel(data: DownloadExcelRequest, db: Session = Depends(get_db)):
+    """下載包含詳細資料的excel檔案"""
+    try:
+        download_data = data.data
+        
+        # 檢查是否有資料
+        if not download_data:
+            raise HTTPException(status_code=400, detail="沒有資料可下載")
+        
+        print(f"開始處理下載請求，共 {len(download_data)} 筆資料")
+        
+        # 準備主要條碼資料
+        main_dict_list = [item.model_dump() for item in download_data]
+        main_df = pd.DataFrame(main_dict_list)
+        
+        print(f"主要資料DataFrame創建完成，形狀: {main_df.shape}")
+        
+        # 重新命名欄位為中文
+        main_df = main_df.rename(columns={
+            'code': '條碼',
+            'upload_time': '最新上傳時間',
+            'scan_count': '掃描次數',
+            'last_scan_time': '最後掃描時間'
+        })
+        
+        # 處理datetime欄位，確保它們可以正確序列化
+        for col in ['最新上傳時間', '最後掃描時間']:
+            if col in main_df.columns:
+                main_df[col] = main_df[col].astype(str)
+        
+        print(f"主要資料處理完成，欄位: {list(main_df.columns)}")
+        
+        # 準備詳細資料工作表
+        upload_records_data = []
+        scan_history_data = []
+        
+        # 獲取每個條碼的詳細資料
+        for barcode_item in download_data:
+            code = barcode_item.code
+            
+            # 獲取所有上傳記錄
+            upload_records = db.query(Barcode).filter(
+                Barcode.code == code
+            ).order_by(Barcode.upload_time.desc()).all()
+            
+            for record in upload_records:
+                upload_records_data.append({
+                    '條碼': code,
+                    '最新上傳時間': record.upload_time,
+                    '掃描次數': record.scan_count,
+                    '最後掃描時間': record.last_scan_time
+                })
+            
+            # 獲取掃描歷史
+            scan_history = db.query(ScanHistory).filter(
+                ScanHistory.barcode == code
+            ).order_by(ScanHistory.timestamp.desc()).all()
+            
+            for scan in scan_history:
+                scan_history_data.append({
+                    '條碼': code,
+                    '掃描結果': '收單確認' if scan.result == 'success' else '非收單項目',
+                    '掃描時間': scan.timestamp
+                })
+        
+        # 創建DataFrame
+        upload_records_df = pd.DataFrame(upload_records_data)
+        scan_history_df = pd.DataFrame(scan_history_data)
+        
+        print(f"上傳記錄資料: {len(upload_records_data)} 筆")
+        print(f"掃描歷史資料: {len(scan_history_data)} 筆")
+        
+        # 處理datetime欄位
+        if not upload_records_df.empty:
+            for col in ['最新上傳時間', '最後掃描時間']:
+                if col in upload_records_df.columns:
+                    upload_records_df[col] = upload_records_df[col].astype(str)
+        
+        if not scan_history_df.empty:
+            if '掃描時間' in scan_history_df.columns:
+                scan_history_df['掃描時間'] = scan_history_df['掃描時間'].astype(str)
+        
+        # 使用ExcelWriter創建多個工作表
+        output = BytesIO()
+        print("開始創建Excel檔案...")
+        
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # 主要條碼資料工作表
+            print("寫入主要條碼資料工作表...")
+            main_df.to_excel(writer, sheet_name='條碼資料', index=False)
+            
+            # 上傳記錄詳細資料工作表
+            if not upload_records_df.empty:
+                print("寫入上傳記錄詳細工作表...")
+                upload_records_df.to_excel(writer, sheet_name='上傳記錄詳細', index=False)
+            else:
+                print("上傳記錄為空，跳過該工作表")
+            
+            # 掃描歷史詳細資料工作表
+            if not scan_history_df.empty:
+                print("寫入掃描歷史詳細工作表...")
+                scan_history_df.to_excel(writer, sheet_name='掃描歷史詳細', index=False)
+            else:
+                print("掃描歷史為空，跳過該工作表")
+            
+            # 調整欄位寬度以便閱讀
+            for sheet_name in writer.sheets:
+                worksheet = writer.sheets[sheet_name]
+                for column in worksheet.columns:
+                    max_length = 0
+                    column_letter = column[0].column_letter
+                    for cell in column:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except:
+                            pass
+                    adjusted_width = min(max_length + 2, 50)  # 限制最大寬度
+                    worksheet.column_dimensions[column_letter].width = adjusted_width
+        
+        output.seek(0)
+        
+        # 根據資料筆數生成檔案名稱
+        filename = f"barcodes_data_{len(download_data)}.xlsx"
+        
+        return Response(
+            content=output.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"下載Excel失敗: {str(e)}")
 
 @app.post("/api/offline-sync", response_model=MessageResponse)
 def sync_offline_records(sync_request: OfflineSyncRequest, db: Session = Depends(get_db)):
@@ -542,7 +663,7 @@ def sync_offline_records(sync_request: OfflineSyncRequest, db: Session = Depends
 def get_barcode_details(code: str, db: Session = Depends(get_db)):
     """獲取指定條碼的所有上傳記錄和掃描歷史"""
     try:
-        # 獲取所有相同條碼的上傳記錄（按上傳時間排序）
+        # 獲取所有相同條碼的上傳記錄（按最新上傳時間排序）
         upload_records = db.query(Barcode).filter(
             Barcode.code == code
         ).order_by(Barcode.upload_time.desc()).all()

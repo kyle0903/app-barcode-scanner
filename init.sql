@@ -17,15 +17,15 @@ CREATE TABLE IF NOT EXISTS scan_history (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- CREATE TABLE IF NOT EXISTS api_logs (
---     id SERIAL PRIMARY KEY,
---     method VARCHAR(10) NOT NULL,
---     endpoint VARCHAR(255) NOT NULL,
---     request_data VARCHAR(1000),
---     response_status INTEGER NOT NULL,
---     response_data VARCHAR(1000),
---     client_ip VARCHAR(45),
---     execution_time FLOAT,
---     user_agent VARCHAR(500),
---     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
--- );
+CREATE TABLE IF NOT EXISTS api_logs (
+    id SERIAL PRIMARY KEY,
+    method VARCHAR(10) NOT NULL,
+    endpoint VARCHAR(255) NOT NULL,
+    request_data VARCHAR(1000),
+    response_status INTEGER NOT NULL,
+    response_data VARCHAR(1000),
+    client_ip VARCHAR(45),
+    execution_time FLOAT,
+    user_agent VARCHAR(500),
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

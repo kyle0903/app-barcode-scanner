@@ -140,7 +140,9 @@ const DataTab = ({ barcodes, stats }) => {
       a.href = url;
 
       // 根據是否有搜尋條件來決定檔案名稱
-      const fileName = `條碼資料_${filteredBarcodes.length}.xlsx`;
+      const fileName = `${new Date().toLocaleDateString()}_收單資料_${
+        filteredBarcodes.length
+      }.xlsx`;
 
       a.download = fileName;
       document.body.appendChild(a);
@@ -594,7 +596,7 @@ const DataTab = ({ barcodes, stats }) => {
                 </TableCell>
                 {!isTablet && (
                   <TableCell>
-                    <strong>上傳時間</strong>
+                    <strong>最新上傳時間</strong>
                   </TableCell>
                 )}
                 <TableCell>
