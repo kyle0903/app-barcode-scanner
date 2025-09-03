@@ -4,30 +4,17 @@ import {
   Card,
   CardContent,
   Button,
-  Slider,
   Typography,
-  Alert,
   Paper,
   Stack,
-  IconButton,
-  AppBar,
-  Toolbar,
 } from "@mui/material";
-import {
-  VolumeUp,
-  VolumeOff,
-  QrCodeScanner,
-  Settings,
-} from "@mui/icons-material";
 import { apiService } from "../services/apiService";
 import { audioService } from "../services/audioService";
 import { offlineScanService } from "../services/offlineScanService";
 
 const ScanPage = () => {
   const [scanResult, setScanResult] = useState(null);
-  const [volume, setVolume] = useState(100);
-  const [isScanning, setIsScanning] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+
   const [scanHistory, setScanHistory] = useState([]);
   const [isOnline, setIsOnline] = useState(false);
   const [offlineStats, setOfflineStats] = useState({ total: 0, unsynced: 0 });
@@ -45,8 +32,12 @@ const ScanPage = () => {
     try {
       const data = await apiService.getScanHistory(100);
       setScanHistory(data);
+      // API成功時，設置為線上狀態
+      setIsOnline(true);
     } catch (error) {
       console.error("載入掃描歷史失敗:", error);
+      // API失敗時，設置為離線狀態
+      setIsOnline(false);
     }
   }, []);
 
@@ -55,8 +46,12 @@ const ScanPage = () => {
       const data = await apiService.getBarcodes();
       offlineScanService.initializeBarcodeCache(data);
       updateBarcodeStats();
+      // API成功時，設置為線上狀態
+      setIsOnline(true);
     } catch (error) {
       console.error("載入條碼清單失敗:", error);
+      // API失敗時，設置為離線狀態
+      setIsOnline(false);
     }
   }, []);
 
@@ -77,25 +72,8 @@ const ScanPage = () => {
     setBarcodeStats(stats);
   };
 
-  // 檢查後端連接
-  const checkBackendConnection = async () => {
-    try {
-      const isConnected = await offlineScanService.checkBackendConnection();
-      setIsOnline(isConnected);
-      console.log("後端連接狀態:", isConnected ? "已連接" : "未連接");
-    } catch (error) {
-      console.error("檢查後端連接失敗:", error);
-      setIsOnline(false);
-    }
-  };
-
   // 同步離線記錄
   const syncOfflineRecords = useCallback(async () => {
-    if (!isOnline) {
-      console.log("後端未連接，跳過同步");
-      return;
-    }
-
     const unsyncedRecords = offlineScanService.getUnsyncedRecords();
     if (unsyncedRecords.length === 0) {
       console.log("沒有需要同步的記錄");
@@ -117,6 +95,9 @@ const ScanPage = () => {
       const result = await apiService.syncOfflineRecords(recordsToSync);
       console.log("同步結果:", result);
 
+      // 同步成功，設置為線上狀態
+      setIsOnline(true);
+
       // 標記為已同步
       const syncedIds = unsyncedRecords.map((record) => record.id);
       offlineScanService.markAsSynced(syncedIds);
@@ -129,11 +110,13 @@ const ScanPage = () => {
 
       // 重新載入掃描歷史
       loadScanHistory();
+      loadBarcodes();
     } catch (error) {
       console.error("同步離線記錄失敗:", error);
-      // 同步失敗時不影響掃描功能，只是記錄錯誤
+      // 同步失敗時設置為離線狀態
+      setIsOnline(false);
     }
-  }, [isOnline, loadScanHistory]);
+  }, [loadScanHistory, loadBarcodes]);
 
   // 處理掃描到的條碼
   const handleScannedCode = useCallback(
@@ -152,25 +135,33 @@ const ScanPage = () => {
             offlineScanService.updateBarcodeScanInfo(result.barcode_info.code);
             updateBarcodeStats();
           }
+
+          // 在本地掃描時快速檢查網路狀態（非阻塞）
+          Promise.race([
+            apiService.healthCheck(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("timeout")), 1000)
+            ),
+          ])
+            .then(() => {
+              setIsOnline(true);
+            })
+            .catch(() => {
+              setIsOnline(false);
+            });
         } else {
-          // 如果快取未初始化且後端連接正常，嘗試使用API掃描條碼
-          if (isOnline) {
-            try {
-              result = await apiService.scanBarcode(barcode);
-            } catch (error) {
-              console.error("API掃描失敗:", error);
-              // API失敗時，返回錯誤結果
-              result = {
-                result: "error",
-                message: "❌ 掃描失敗，請檢查後端連接",
-                barcode_info: null,
-              };
-            }
-          } else {
-            // 後端未連接且無快取時，無法驗證
+          // 如果快取未初始化，嘗試使用API掃描條碼
+          try {
+            result = await apiService.scanBarcode(barcode);
+            // API成功時，設置為線上狀態
+            setIsOnline(true);
+          } catch (error) {
+            console.error("API掃描失敗:", error);
+            // API失敗時，設置為離線狀態並返回錯誤結果
+            setIsOnline(false);
             result = {
               result: "error",
-              message: "❌ 後端未連接且無條碼快取，無法驗證",
+              message: "❌ 掃描失敗，請檢查後端連接",
               barcode_info: null,
             };
           }
@@ -178,12 +169,27 @@ const ScanPage = () => {
         setScanResult(result);
 
         // 播放對應音效
-        if (result.result === "success") {
-          audioService.playSuccessSound();
-        } else if (result.result === "duplicate") {
-          audioService.playDuplicateSound();
-        } else {
-          audioService.playErrorSound();
+        try {
+          if (result.result === "success") {
+            // 檢查掃描進度是否達到100%
+            const currentStats = offlineScanService.getBarcodeCacheStats();
+            const progress =
+              currentStats.total > 0
+                ? (currentStats.scanned / currentStats.total) * 100
+                : 0;
+
+            if (progress >= 100) {
+              // 達成目標，播放特殊音效
+              await audioService.playAchievementSound();
+            } else {
+              // 普通成功音效
+              await audioService.playSuccessSound();
+            }
+          } else {
+            await audioService.playErrorSound();
+          }
+        } catch (error) {
+          console.warn("音效播放失敗:", error);
         }
 
         // 保存到離線記錄（包含所有掃描結果）
@@ -197,12 +203,12 @@ const ScanPage = () => {
         offlineScanService.addScanRecord(scanRecord);
         updateOfflineStats();
 
-        if (isOnline) {
-          // 異步同步，不等待結果
-          syncOfflineRecords().catch((error) => {
-            console.log("背景同步失敗:", error);
-          });
-        }
+        // 嘗試異步同步，不等待結果，並更新線上狀態
+        syncOfflineRecords().catch((error) => {
+          console.log("背景同步失敗:", error);
+          // 背景同步失敗時，確保設置為離線狀態
+          setIsOnline(false);
+        });
 
         setTimeout(() => setScanResult(null), 2000);
       } catch (error) {
@@ -213,17 +219,23 @@ const ScanPage = () => {
           message: "掃描失敗，請稍後再試",
           barcode_info: null,
         });
-        audioService.playErrorSound();
+        try {
+          await audioService.playErrorSound();
+        } catch (error) {
+          console.warn("音效播放失敗:", error);
+        }
         setTimeout(() => setScanResult(null), 2000);
       }
     },
-    [isOnline, syncOfflineRecords]
+    [syncOfflineRecords]
   );
 
   useEffect(() => {
     loadData();
     // 初始化音效服務
     audioService.init();
+    // 設定音量為100%
+    audioService.setVolume(1.0);
 
     // 更新同步統計
     updateOfflineStats();
@@ -231,61 +243,13 @@ const ScanPage = () => {
     // 更新條碼統計
     updateBarcodeStats();
 
-    // 檢查後端連接狀態
-    checkBackendConnection();
-
-    // 定期檢查後端連接狀態（每10秒）
-    const intervalId = setInterval(() => {
-      checkBackendConnection();
-    }, 10000);
-
-    // 返回清理函數
-    return () => {
-      clearInterval(intervalId);
-    };
-  }, [loadData, syncOfflineRecords]);
+    // 初始設定為離線狀態，等待第一次同步成功後再設為線上
+    setIsOnline(false);
+  }, [loadData]);
 
   useEffect(() => {
-    // 檢查頁面是否可見和是否有焦點
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        // 頁面不可見時，停止掃描器
-        setIsScanning(false);
-        console.log("頁面不可見，掃描器已停止");
-      } else {
-        // 頁面可見時，檢查是否有焦點
-        if (document.hasFocus()) {
-          setIsScanning(true);
-          console.log("頁面可見且有焦點，掃描器已啟動");
-        } else {
-          setIsScanning(false);
-          console.log("頁面可見但無焦點，掃描器已停止");
-        }
-      }
-    };
-
-    // 檢查頁面焦點變化
-    const handleFocusChange = () => {
-      if (document.hidden) {
-        return; // 如果頁面不可見，不處理焦點變化
-      }
-
-      if (document.hasFocus()) {
-        setIsScanning(true);
-        console.log("頁面獲得焦點，掃描器已啟動");
-      } else {
-        setIsScanning(false);
-        console.log("頁面失去焦點，掃描器已停止");
-      }
-    };
-
     // 全域鍵盤事件監聽，用於處理掃描器輸入
     const handleGlobalKeyPress = (e) => {
-      // 只有在頁面可見且掃描器啟動時才處理
-      if (document.hidden || !isScanning) {
-        return;
-      }
-
       // 掃描器通常會快速連續輸入字符，然後以 Enter 結束
       if (e.key === "Enter") {
         // 處理完整的掃描輸入
@@ -312,120 +276,39 @@ const ScanPage = () => {
 
     // 添加事件監聽
     document.addEventListener("keypress", handleGlobalKeyPress);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("focus", handleFocusChange);
-    window.addEventListener("blur", handleFocusChange);
-
-    // 初始設定掃描狀態
-    const initialScanningState = !document.hidden && document.hasFocus();
-    setIsScanning(initialScanningState);
-    console.log("初始掃描狀態:", initialScanningState ? "啟動" : "停止");
 
     return () => {
       document.removeEventListener("keypress", handleGlobalKeyPress);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("focus", handleFocusChange);
-      window.removeEventListener("blur", handleFocusChange);
       if (scanTimeout.current) {
         clearTimeout(scanTimeout.current);
       }
-      setIsScanning(false);
     };
-  }, [loadData, handleScannedCode, isScanning]);
-
-  const handleVolumeChange = (event, newValue) => {
-    setVolume(newValue);
-    audioService.setVolume(newValue / 100);
-  };
-
-  const getResultSeverity = (result) => {
-    switch (result) {
-      case "success":
-        return "success";
-      case "error":
-        return "error";
-      case "duplicate":
-        return "warning";
-      default:
-        return "info";
-    }
-  };
+  }, [handleScannedCode]);
 
   return (
     <Box sx={{ minHeight: "100vh", backgroundColor: "#f5f5f5" }}>
-      {/* 獨立的頂部導航欄 */}
-      <AppBar position="static" sx={{ backgroundColor: "#1976d2" }}>
-        <Toolbar>
-          <Typography
-            variant="h4"
-            component="div"
-            sx={{
-              flexGrow: 1,
-              textAlign: "center",
-              fontWeight: "bold",
-            }}
-          >
-            條碼掃描器
-          </Typography>
-          <IconButton
-            color="inherit"
-            onClick={() => setShowSettings(!showSettings)}
-          >
-            <Settings />
-          </IconButton>
-        </Toolbar>
-      </AppBar>
-
       <Box sx={{ padding: "16px", maxWidth: "600px", margin: "0 auto" }}>
-        {/* 掃描狀態指示器 */}
-        <Card sx={{ marginBottom: "16px" }}>
-          <CardContent>
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: 2,
-                padding: 2,
-                borderRadius: 2,
-                backgroundColor: isScanning
-                  ? "rgba(76, 175, 80, 0.1)"
-                  : "rgba(158, 158, 158, 0.1)",
-                border: `2px solid ${isScanning ? "#4caf50" : "#9e9e9e"}`,
-              }}
-            >
-              <QrCodeScanner
-                sx={{
-                  color: isScanning ? "#4caf50" : "#9e9e9e",
-                  fontSize: "2rem",
-                }}
-              />
-              <Box sx={{ flex: 1 }}>
-                <Typography variant="h6" fontWeight="bold">
-                  {isScanning ? "掃描器已啟動" : "掃描器未啟動"}
-                </Typography>
+        {/* 離線同步按鈕 - 只在離線狀態且有未同步記錄時顯示 */}
+        {!isOnline && offlineStats.unsynced > 0 && (
+          <Card sx={{ marginBottom: "16px" }}>
+            <CardContent>
+              <Box sx={{ textAlign: "center" }}>
+                <Button
+                  onClick={syncOfflineRecords}
+                  variant="contained"
+                  color="primary"
+                  size="large"
+                  sx={{ marginBottom: 1 }}
+                >
+                  同步離線記錄 ({offlineStats.unsynced} 條)
+                </Button>
                 <Typography variant="body2" color="text.secondary">
-                  {isScanning ? "可直接掃描條碼" : "請檢查掃描器連接"}
+                  點擊同步本地記錄到伺服器
                 </Typography>
               </Box>
-              <Box sx={{ textAlign: "right" }}>
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <Typography
-                    variant="body2"
-                    color={isOnline ? "success.main" : "error.main"}
-                    fontWeight="bold"
-                  >
-                    {isOnline ? "🟢 線上" : "🔴 離線"}
-                  </Typography>
-                </Box>
-                {offlineStats.unsynced > 0 && (
-                  <Typography variant="caption" color="warning.main">
-                    待同步: {offlineStats.unsynced} 條
-                  </Typography>
-                )}
-              </Box>
-            </Box>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
 
         {/* 條碼統計 */}
         <Card sx={{ marginBottom: "16px" }}>
@@ -523,15 +406,11 @@ const ScanPage = () => {
               backgroundColor:
                 scanResult.result === "success"
                   ? "rgba(76, 175, 80, 0.8)" // 綠色
-                  : scanResult.result === "duplicate"
-                  ? "rgba(255, 193, 7, 0.8)" // 黃色
                   : "rgba(244, 67, 54, 0.8)", // 紅色
               backdropFilter: "blur(10px)",
               border: `3px solid ${
                 scanResult.result === "success"
                   ? "rgba(76, 175, 80, 1)"
-                  : scanResult.result === "duplicate"
-                  ? "rgba(255, 193, 7, 1)"
                   : "rgba(244, 67, 54, 1)"
               }`,
               boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3)",
@@ -573,63 +452,6 @@ const ScanPage = () => {
           </Box>
         )}
 
-        {/* 設定面板 */}
-        {showSettings && (
-          <Card sx={{ marginBottom: "16px" }}>
-            <CardContent>
-              <Typography variant="h6" component="h4" gutterBottom>
-                音效設定
-              </Typography>
-              <Box sx={{ marginBottom: "16px" }}>
-                <Typography variant="body2" gutterBottom>
-                  音量: {volume}%
-                </Typography>
-                <Box
-                  sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 2,
-                  }}
-                >
-                  <VolumeOff />
-                  <Slider
-                    value={volume}
-                    onChange={handleVolumeChange}
-                    min={0}
-                    max={100}
-                    step={10}
-                    valueLabelDisplay="auto"
-                    sx={{ flex: 1 }}
-                  />
-                  <VolumeUp />
-                </Box>
-              </Box>
-
-              {/* 離線同步設定 */}
-              <Typography variant="h6" component="h4" gutterBottom>
-                離線同步
-              </Typography>
-              <Box sx={{ marginBottom: "16px" }}>
-                <Typography variant="body2" gutterBottom>
-                  本地記錄: {offlineStats.total} 條，未同步:{" "}
-                  {offlineStats.unsynced} 條
-                </Typography>
-                <Stack direction="row" spacing={2}>
-                  <Button
-                    onClick={syncOfflineRecords}
-                    variant="outlined"
-                    color="primary"
-                    size="small"
-                    disabled={!isOnline || offlineStats.unsynced === 0}
-                  >
-                    手動同步
-                  </Button>
-                </Stack>
-              </Box>
-            </CardContent>
-          </Card>
-        )}
-
         {/* 最近掃描記錄 */}
         <Card>
           <CardContent>
@@ -653,23 +475,10 @@ const ScanPage = () => {
                     sx={{
                       padding: "12px",
                       backgroundColor:
-                        scan.result === "success"
-                          ? "#d4edda"
-                          : scan.result === "duplicate"
-                          ? "#fff3cd"
-                          : "#f8d7da",
-                      color:
-                        scan.result === "success"
-                          ? "#155724"
-                          : scan.result === "duplicate"
-                          ? "#856404"
-                          : "#721c24",
+                        scan.result === "success" ? "#d4edda" : "#f8d7da",
+                      color: scan.result === "success" ? "#155724" : "#721c24",
                       border: `1px solid ${
-                        scan.result === "success"
-                          ? "#c3e6cb"
-                          : scan.result === "duplicate"
-                          ? "#ffeaa7"
-                          : "#f5c6cb"
+                        scan.result === "success" ? "#c3e6cb" : "#f5c6cb"
                       }`,
                     }}
                   >
@@ -679,8 +488,6 @@ const ScanPage = () => {
                     <Typography variant="body2">
                       {scan.result === "success"
                         ? "✅ 收單確認"
-                        : scan.result === "duplicate"
-                        ? "⚠️ 收單已確認"
                         : "❌ 非收單項目"}{" "}
                       - {new Date(scan.timestamp).toLocaleString()}
                     </Typography>

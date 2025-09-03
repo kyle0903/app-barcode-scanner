@@ -30,7 +30,7 @@ const Header = () => {
             component="h1"
             sx={{ marginBottom: "10px", color: "white" }}
           >
-            倉庫條碼收單管理系統
+            倉庫收單管理系統
           </Typography>
         </Box>
       </Box>

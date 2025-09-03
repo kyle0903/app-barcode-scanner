@@ -23,8 +23,6 @@ import {
   styled,
 } from "@mui/material";
 import {
-  Delete,
-  DeleteSweep,
   Search,
   Clear,
   DateRange,
@@ -32,6 +30,7 @@ import {
   ExpandLess,
   FilterList,
   Download,
+  Info,
 } from "@mui/icons-material";
 import { apiService } from "../services/apiService";
 
@@ -91,9 +90,8 @@ const SearchContainer = styled(Box)(({ theme }) => ({
     "inset 0 2px 4px rgba(0, 0, 0, 0.02), 0 4px 20px rgba(0, 0, 0, 0.05)",
 }));
 
-const DataTab = ({ barcodes, stats, onDeleteBarcode, onClearAll }) => {
+const DataTab = ({ barcodes, stats }) => {
   const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down("md"));
   const isTablet = useMediaQuery(theme.breakpoints.down("lg"));
 
   const [searchInput, setSearchInput] = useState("");
@@ -104,17 +102,31 @@ const DataTab = ({ barcodes, stats, onDeleteBarcode, onClearAll }) => {
   const [searchMessage, setSearchMessage] = useState("");
   const [showSearchPanel, setShowSearchPanel] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 20;
+  const [expandedRow, setExpandedRow] = useState(null);
+  const [barcodeDetails, setBarcodeDetails] = useState({});
+  const itemsPerPage = 100;
 
-  const handleDelete = (barcodeId) => {
-    if (window.confirm("確定要刪除此條碼嗎？")) {
-      onDeleteBarcode(barcodeId);
+  // 處理詳細內容展開/收起
+  const handleToggleDetails = async (barcodeCode) => {
+    if (expandedRow === barcodeCode) {
+      setExpandedRow(null);
+      return;
     }
-  };
 
-  const handleClearAll = () => {
-    if (window.confirm("確定要清空所有資料嗎？此操作無法復原！")) {
-      onClearAll();
+    setExpandedRow(barcodeCode);
+
+    // 如果還沒有載入過這個條碼的詳細資料，就去載入
+    if (!barcodeDetails[barcodeCode]) {
+      try {
+        // 這裡需要新的 API 來獲取條碼的所有記錄和掃描歷史
+        const details = await apiService.getBarcodeDetails(barcodeCode);
+        setBarcodeDetails((prev) => ({
+          ...prev,
+          [barcodeCode]: details,
+        }));
+      } catch (error) {
+        console.error("載入詳細資料失敗:", error);
+      }
     }
   };
 
@@ -528,162 +540,80 @@ const DataTab = ({ barcodes, stats, onDeleteBarcode, onClearAll }) => {
           >
             下載資料 ({filteredBarcodes.length} 筆)
           </Button>
-          <Button
-            onClick={handleClearAll}
-            variant="contained"
-            color="error"
-            startIcon={<DeleteSweep />}
-            size="medium"
-          >
-            清空資料
-          </Button>
         </Box>
       </GlassContainer>
 
-      <GlassContainer sx={{ padding: 3, overflow: "hidden" }}>
-        {isMobile ? (
-          // 手機版：簡潔列表佈局
-          <Box>
-            {currentBarcodes.length === 0 ? (
-              <Box sx={{ textAlign: "center", padding: "40px" }}>
-                <Typography variant="body1" color="text.secondary">
-                  {searchMessage ? "查詢結果為空" : "尚無條碼資料"}
-                </Typography>
-              </Box>
-            ) : (
-              <Stack spacing={1}>
-                {currentBarcodes.map((barcode, index) => (
-                  <Box
-                    key={barcode.id}
-                    sx={{
-                      padding: 2,
-                      background: "rgba(255, 255, 255, 0.7)",
-                      borderRadius: "12px",
-                      border: "1px solid rgba(226, 232, 240, 0.6)",
-                      transition: "all 0.2s ease",
-                      "&:hover": {
-                        background: "rgba(255, 255, 255, 0.9)",
-                        transform: "translateX(4px)",
-                        boxShadow: "0 4px 12px rgba(0, 0, 0, 0.1)",
-                      },
-                    }}
-                  >
-                    <Box
-                      sx={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        marginBottom: 1,
-                      }}
-                    >
-                      <Chip
-                        label={`#${startIndex + index + 1}`}
-                        size="small"
-                        variant="outlined"
-                        color="primary"
-                      />
-                      <IconButton
-                        size="small"
-                        color="error"
-                        onClick={() => handleDelete(barcode.id)}
-                        sx={{
-                          background: "rgba(244, 67, 54, 0.1)",
-                          "&:hover": {
-                            background: "rgba(244, 67, 54, 0.2)",
-                          },
-                        }}
-                      >
-                        <Delete fontSize="small" />
-                      </IconButton>
-                    </Box>
-
-                    <Typography
-                      variant="body1"
-                      sx={{
-                        fontFamily: "monospace",
-                        fontWeight: "bold",
-                        color: "primary.main",
-                        marginBottom: 1.5,
-                        fontSize: "1.1rem",
-                      }}
-                    >
-                      {barcode.code}
-                    </Typography>
-
-                    <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-                      <Chip
-                        label={`掃描 ${barcode.scan_count} 次`}
-                        size="small"
-                        color={barcode.scan_count > 0 ? "success" : "default"}
-                        variant="filled"
-                      />
-                      <Chip
-                        label={
-                          barcode.upload_time
-                            ? new Date(barcode.upload_time).toLocaleDateString()
-                            : "未知日期"
-                        }
-                        size="small"
-                        variant="outlined"
-                      />
-                    </Box>
-                  </Box>
-                ))}
-              </Stack>
-            )}
-          </Box>
-        ) : (
-          // 桌面版：表格佈局
-          <TableContainer
-            component={Box}
+      <GlassContainer
+        sx={{
+          padding: 3,
+          overflow: "hidden",
+        }}
+      >
+        <TableContainer
+          component={Box}
+          sx={{
+            flex: 1,
+            overflowX: "auto",
+            background: "rgba(255, 255, 255, 0.5)",
+            borderRadius: "12px",
+            boxShadow: "inset 0 1px 3px rgba(0, 0, 0, 0.1)",
+            maxHeight: "calc(100% - 80px)", // 為分頁組件預留空間
+          }}
+        >
+          <Table
             sx={{
-              overflowX: "auto",
-              background: "rgba(255, 255, 255, 0.5)",
-              borderRadius: "12px",
-              boxShadow: "inset 0 1px 3px rgba(0, 0, 0, 0.1)",
+              minWidth: isTablet ? 500 : 650,
+              tableLayout: "fixed", // 固定表格佈局，防止列寬動態變化
+              "& .MuiTableCell-root": {
+                padding: "8px 12px",
+                fontSize: "0.875rem",
+              },
+              "& .MuiTableHead-root .MuiTableCell-root": {
+                padding: "6px 12px",
+                fontSize: "0.8rem",
+              },
             }}
           >
-            <Table sx={{ minWidth: isTablet ? 500 : 650 }}>
-              <TableHead>
-                <TableRow
-                  sx={{
-                    background:
-                      "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-                    "& .MuiTableCell-root": {
-                      color: "white",
-                      fontWeight: "bold",
-                      borderBottom: "none",
-                    },
-                  }}
-                >
+            <TableHead>
+              <TableRow
+                sx={{
+                  background:
+                    "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                  "& .MuiTableCell-root": {
+                    color: "white",
+                    fontWeight: "bold",
+                    borderBottom: "none",
+                  },
+                }}
+              >
+                <TableCell>
+                  <strong>#</strong>
+                </TableCell>
+                <TableCell>
+                  <strong>條碼</strong>
+                </TableCell>
+                {!isTablet && (
                   <TableCell>
-                    <strong>#</strong>
+                    <strong>上傳時間</strong>
                   </TableCell>
+                )}
+                <TableCell>
+                  <strong>被掃描次數</strong>
+                </TableCell>
+                {!isTablet && (
                   <TableCell>
-                    <strong>條碼</strong>
+                    <strong>最後掃描時間</strong>
                   </TableCell>
-                  {!isTablet && (
-                    <TableCell>
-                      <strong>上傳時間</strong>
-                    </TableCell>
-                  )}
-                  <TableCell>
-                    <strong>被掃描次數</strong>
-                  </TableCell>
-                  {!isTablet && (
-                    <TableCell>
-                      <strong>最後掃描時間</strong>
-                    </TableCell>
-                  )}
-                  <TableCell>
-                    <strong>操作</strong>
-                  </TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {currentBarcodes.map((barcode, index) => (
+                )}
+                <TableCell>
+                  <strong>詳細內容</strong>
+                </TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {currentBarcodes.map((barcode, index) => (
+                <React.Fragment key={barcode.id}>
                   <TableRow
-                    key={barcode.id}
                     sx={{
                       "&:nth-of-type(odd)": {
                         backgroundColor: "rgba(255, 255, 255, 0.7)",
@@ -693,9 +623,9 @@ const DataTab = ({ barcodes, stats, onDeleteBarcode, onClearAll }) => {
                       },
                       "&:hover": {
                         backgroundColor: "rgba(102, 126, 234, 0.1)",
-                        transform: "scale(1.01)",
                       },
-                      transition: "all 0.2s ease",
+                      transition: "background-color 0.2s ease", // 只保留背景色變化，移除縮放
+                      height: "44px", // 稍微增加行高，讓滾動更順暢
                     }}
                   >
                     <TableCell>{startIndex + index + 1}</TableCell>
@@ -745,59 +675,187 @@ const DataTab = ({ barcodes, stats, onDeleteBarcode, onClearAll }) => {
                     <TableCell>
                       <Button
                         size="small"
-                        variant="contained"
-                        color="error"
-                        startIcon={<Delete />}
-                        onClick={() => handleDelete(barcode.id)}
+                        variant="outlined"
+                        color="primary"
+                        startIcon={<Info />}
+                        onClick={() => handleToggleDetails(barcode.code)}
                         sx={{ minWidth: isTablet ? "60px" : "80px" }}
                       >
-                        刪除
+                        {expandedRow === barcode.code ? "收起" : "查看"}
                       </Button>
                     </TableCell>
                   </TableRow>
-                ))}
-                {currentBarcodes.length === 0 && (
-                  <TableRow>
-                    <TableCell
-                      colSpan={isTablet ? 4 : 6}
-                      align="center"
-                      sx={{ padding: "40px" }}
-                    >
-                      <Typography variant="body1" color="text.secondary">
-                        {searchMessage ? "查詢結果為空" : "尚無條碼資料"}
-                      </Typography>
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        )}
+                  {expandedRow === barcode.code && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={6}
+                        sx={{
+                          backgroundColor: "rgba(240, 245, 255, 0.8)",
+                          padding: 3,
+                        }}
+                      >
+                        <Box>
+                          <Typography variant="h6" gutterBottom color="primary">
+                            條碼 {barcode.code} 詳細資料
+                          </Typography>
+
+                          {barcodeDetails[barcode.code] ? (
+                            <Box
+                              sx={{
+                                display: "grid",
+                                gridTemplateColumns: "1fr 1fr",
+                                gap: 3,
+                              }}
+                            >
+                              {/* 上傳記錄 */}
+                              <Box>
+                                <Typography
+                                  variant="subtitle1"
+                                  fontWeight="bold"
+                                  gutterBottom
+                                >
+                                  上傳記錄 (
+                                  {barcodeDetails[barcode.code].total_uploads}{" "}
+                                  次)
+                                </Typography>
+                                <Box
+                                  sx={{
+                                    maxHeight: 200,
+                                    overflow: "auto",
+                                  }}
+                                >
+                                  {barcodeDetails[
+                                    barcode.code
+                                  ].upload_records.map((record, idx) => (
+                                    <Box
+                                      key={record.id}
+                                      sx={{
+                                        padding: 1,
+                                        marginBottom: 1,
+                                        backgroundColor:
+                                          "rgba(255, 255, 255, 0.7)",
+                                        borderRadius: 1,
+                                        fontSize: "0.875rem",
+                                      }}
+                                    >
+                                      <Typography variant="body2">
+                                        <strong>#{idx + 1}</strong>{" "}
+                                        {new Date(
+                                          record.upload_time
+                                        ).toLocaleString()}
+                                      </Typography>
+                                      <Typography
+                                        variant="caption"
+                                        color="text.secondary"
+                                      >
+                                        掃描次數: {record.scan_count} |
+                                        最後掃描:{" "}
+                                        {record.last_scan_time
+                                          ? new Date(
+                                              record.last_scan_time
+                                            ).toLocaleString()
+                                          : "未掃描"}
+                                      </Typography>
+                                    </Box>
+                                  ))}
+                                </Box>
+                              </Box>
+
+                              {/* 掃描歷史 */}
+                              <Box>
+                                <Typography
+                                  variant="subtitle1"
+                                  fontWeight="bold"
+                                  gutterBottom
+                                >
+                                  掃描歷史 (
+                                  {barcodeDetails[barcode.code].total_scans} 次)
+                                </Typography>
+                                <Box sx={{ maxHeight: 200, overflow: "auto" }}>
+                                  {barcodeDetails[
+                                    barcode.code
+                                  ].scan_history.map((scan, idx) => (
+                                    <Box
+                                      key={scan.id}
+                                      sx={{
+                                        padding: 1,
+                                        marginBottom: 1,
+                                        backgroundColor:
+                                          scan.result === "success"
+                                            ? "#e8f5e8"
+                                            : "#ffeaa7",
+                                        borderRadius: 1,
+                                        fontSize: "0.875rem",
+                                      }}
+                                    >
+                                      <Typography variant="body2">
+                                        <strong>#{idx + 1}</strong>{" "}
+                                        {new Date(
+                                          scan.timestamp
+                                        ).toLocaleString()}
+                                      </Typography>
+                                      <Typography variant="caption">
+                                        {scan.result === "success"
+                                          ? "✅ 收單確認"
+                                          : "❌ 非收單項目"}
+                                      </Typography>
+                                    </Box>
+                                  ))}
+                                </Box>
+                              </Box>
+                            </Box>
+                          ) : (
+                            <Typography>載入中...</Typography>
+                          )}
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </React.Fragment>
+              ))}
+              {currentBarcodes.length === 0 && (
+                <TableRow>
+                  <TableCell
+                    colSpan={isTablet ? 5 : 6}
+                    align="center"
+                    sx={{ padding: "40px" }}
+                  >
+                    <Typography variant="body1" color="text.secondary">
+                      {searchMessage ? "查詢結果為空" : "尚無條碼資料"}
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
 
         {/* 分頁組件 */}
-        {totalPages > 1 && (
-          <Box
-            sx={{
-              display: "flex",
-              justifyContent: "center",
-              padding: "20px 0",
-              marginTop: 2,
-              borderTop: "1px solid rgba(226, 232, 240, 0.6)",
-              background: "rgba(255, 255, 255, 0.3)",
-              borderRadius: "0 0 12px 12px",
-            }}
-          >
-            <Pagination
-              count={totalPages}
-              page={currentPage}
-              onChange={handlePageChange}
-              color="primary"
-              size={isMobile ? "small" : "medium"}
-              showFirstButton
-              showLastButton
-            />
-          </Box>
-        )}
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            padding: "20px 0",
+            marginTop: "auto",
+            borderTop: "1px solid rgba(226, 232, 240, 0.6)",
+            background: "rgba(255, 255, 255, 0.3)",
+            borderRadius: "0 0 12px 12px",
+            minHeight: "80px", // 固定最小高度
+            flexShrink: 0, // 防止被壓縮
+            flexDirection: "column",
+          }}
+        >
+          <Pagination
+            count={totalPages}
+            page={currentPage}
+            onChange={handlePageChange}
+            color="primary"
+            size="medium"
+            showFirstButton
+            showLastButton
+          />
+        </Box>
       </GlassContainer>
     </Box>
   );

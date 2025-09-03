@@ -4,7 +4,7 @@ ALTER DATABASE barcode_scanner_db SET client_encoding TO 'UTF8';
 
 CREATE TABLE IF NOT EXISTS barcodes (
     id SERIAL PRIMARY KEY,
-    code VARCHAR(100) UNIQUE NOT NULL,
+    code VARCHAR(100) NOT NULL,
     upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     scan_count INTEGER DEFAULT 0,
     last_scan_time TIMESTAMP

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import Column, Integer, String, DateTime, Float, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy import func
 from pydantic import BaseModel
 from datetime import datetime, date
 from typing import List, Optional
@@ -121,7 +122,7 @@ class Barcode(Base):
     __tablename__ = "barcodes"
     
     id = Column(Integer, primary_key=True, index=True)
-    code = Column(String(100), unique=True, nullable=False, index=True)
+    code = Column(String(100), nullable=False, index=True)
     upload_time = Column(DateTime, nullable=False, default=get_taipei_time)
     scan_count = Column(Integer, default=0)
     last_scan_time = Column(DateTime)
@@ -249,8 +250,22 @@ def get_api_logs(limit: int = 100, db: Session = Depends(get_db)):
 # API 路由
 @app.get("/api/barcodes", response_model=List[BarcodeResponse])
 def get_barcodes(db: Session = Depends(get_db)):
-    """獲取所有條碼"""
-    barcodes = db.query(Barcode).limit(500).all()
+    """獲取所有條碼（每個條碼只顯示最新的記錄）"""
+    
+    
+    # 使用子查詢找出每個條碼的最新上傳時間
+    subquery = db.query(
+        Barcode.code,
+        func.max(Barcode.upload_time).label('latest_upload_time')
+    ).group_by(Barcode.code).subquery()
+    
+    # 獲取每個條碼的最新記錄
+    barcodes = db.query(Barcode).join(
+        subquery,
+        (Barcode.code == subquery.c.code) & 
+        (Barcode.upload_time == subquery.c.latest_upload_time)
+    ).order_by(Barcode.upload_time.desc()).limit(500).all()
+    
     return barcodes
 
 @app.post("/api/barcodes/search", response_model=List[BarcodeResponse])
@@ -311,11 +326,11 @@ def upload_barcodes(barcodes_data: BarcodesBulkCreate, db: Session = Depends(get
     
     for code in barcodes_data.codes:
         if code and not db.query(Barcode).filter(Barcode.code == code).first():
-            barcode = Barcode(code=code)
-            db.add(barcode)
             added_barcodes.append(code)
         else:
             duplicate_barcodes.append(code)
+        barcode = Barcode(code=code)
+        db.add(barcode)
     
     db.commit()
     
@@ -383,22 +398,8 @@ def scan_barcode(scan_data: ScanRequest, db: Session = Depends(get_db)):
         barcode = db.query(Barcode).filter(Barcode.code == code).first()
         
         if barcode:
-            # 條碼存在，檢查是否重複掃描
+            # 條碼存在，直接確認收單（不檢查重複）
             current_time = get_taipei_time()
-            from datetime import timedelta
-            one_second_ago = current_time - timedelta(seconds=1)
-            
-            recent_scan = db.query(ScanHistory).filter(
-                ScanHistory.barcode == code,
-                ScanHistory.timestamp > one_second_ago
-            ).order_by(ScanHistory.timestamp.desc()).first()
-            
-            if recent_scan:
-                return ScanResponse(
-                    result="duplicate", 
-                    message="⚠️收單已確認",
-                    barcode=code
-                )
             
             # 原子操作：更新掃描次數和時間
             barcode.scan_count += 1
@@ -444,7 +445,7 @@ def get_scan_history(limit: int = 10, db: Session = Depends(get_db)):
 @app.get("/api/stats", response_model=StatsResponse)
 def get_stats(db: Session = Depends(get_db)):
     """獲取統計資料"""
-    total_barcodes = db.query(Barcode).count()
+    total_barcodes = db.query(Barcode.code).distinct().count()
     # 計算不重複的成功掃描條碼數量
     successful_scans = db.query(ScanHistory.barcode).filter(
         ScanHistory.result == 'success'
@@ -512,7 +513,7 @@ def sync_offline_records(sync_request: OfflineSyncRequest, db: Session = Depends
                 db.add(scan_history)
                 
                 # 如果是成功掃描，更新條碼的掃描次數
-                if record.result == 'success' or record.result == 'duplicate':
+                if record.result == 'success':
                     barcode = db.query(Barcode).filter(Barcode.code == record.barcode).first()
                     if barcode:
                         barcode.scan_count += 1
@@ -535,6 +536,50 @@ def sync_offline_records(sync_request: OfflineSyncRequest, db: Session = Depends
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"同步失敗: {str(e)}")
+
+
+@app.get("/api/barcodes/details/{code}")
+def get_barcode_details(code: str, db: Session = Depends(get_db)):
+    """獲取指定條碼的所有上傳記錄和掃描歷史"""
+    try:
+        # 獲取所有相同條碼的上傳記錄（按上傳時間排序）
+        upload_records = db.query(Barcode).filter(
+            Barcode.code == code
+        ).order_by(Barcode.upload_time.desc()).all()
+        
+        if not upload_records:
+            raise HTTPException(status_code=404, detail="條碼不存在")
+        
+        # 獲取掃描歷史（按掃描時間排序）
+        scan_history = db.query(ScanHistory).filter(
+            ScanHistory.barcode == code
+        ).order_by(ScanHistory.timestamp.desc()).all()
+        
+        return {
+            "code": code,
+            "upload_records": [
+                {
+                    "id": record.id,
+                    "upload_time": record.upload_time,
+                    "scan_count": record.scan_count,
+                    "last_scan_time": record.last_scan_time
+                } for record in upload_records
+            ],
+            "scan_history": [
+                {
+                    "id": scan.id,
+                    "result": scan.result,
+                    "timestamp": scan.timestamp
+                } for scan in scan_history
+            ],
+            "total_uploads": len(upload_records),
+            "total_scans": len(scan_history)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"獲取詳細資料失敗: {str(e)}")
 
 
 # 創建資料庫表格

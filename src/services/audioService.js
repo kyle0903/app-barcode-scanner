@@ -82,17 +82,22 @@ class AudioService {
   }
 
   // 確保音效系統已啟動（處理瀏覽器自動播放限制）
-  ensureAudioContext() {
+  async ensureAudioContext() {
     if (this.audioContext && this.audioContext.state === "suspended") {
-      this.audioContext.resume();
+      try {
+        await this.audioContext.resume();
+        console.log("AudioContext resumed successfully");
+      } catch (error) {
+        console.warn("Failed to resume AudioContext:", error);
+      }
     }
   }
 
   // 產生音效 (舊版簡單方波)
-  generateTone(frequency, duration, volume = this.currentVolume) {
+  async generateTone(frequency, duration, volume = this.currentVolume) {
     if (!this.audioContext) return;
 
-    this.ensureAudioContext();
+    await this.ensureAudioContext();
 
     try {
       const oscillator = this.audioContext.createOscillator();
@@ -118,7 +123,7 @@ class AudioService {
   }
 
   // 可疊加泛音/濾波/滑音的合成音
-  tone(
+  async tone(
     {
       freq = 440,
       dur = 0.2,
@@ -132,7 +137,7 @@ class AudioService {
     when = this.#now()
   ) {
     if (!this.audioContext) return;
-    this.ensureAudioContext();
+    await this.ensureAudioContext();
     const fanOut = this.audioContext.createGain();
     fanOut.gain.value = 1.0;
     let last = fanOut;
@@ -191,7 +196,7 @@ class AudioService {
   }
 
   // 低頻 thud（帶噪聲）
-  thud(
+  async thud(
     {
       baseFreq = 180,
       dur = 0.18,
@@ -204,7 +209,7 @@ class AudioService {
     when = this.#now()
   ) {
     if (!this.audioContext) return;
-    this.ensureAudioContext();
+    await this.ensureAudioContext();
     const end = when + dur;
     const o = this.audioContext.createOscillator();
     o.type = "sine";
@@ -241,11 +246,12 @@ class AudioService {
   }
 
   // 高頻/氣泡感噪聲（做「叮」的空氣感）
-  noiseBurst(
+  async noiseBurst(
     { dur = 0.12, gain = 0.25, type = "highpass", freq = 1800, Q = 0.7 },
     when = this.#now()
   ) {
     if (!this.audioContext) return;
+    await this.ensureAudioContext();
     const end = when + dur;
     const src = this.audioContext.createBufferSource();
     src.buffer = this.noiseBuffer;
@@ -264,11 +270,12 @@ class AudioService {
     src.stop(end);
   }
 
-  pair(playA, playB, gap = 0.08) {
+  async pair(playA, playB, gap = 0.08) {
     if (!this.audioContext) return;
+    await this.ensureAudioContext();
     const t0 = this.#now() + 0.01;
-    playA(t0);
-    playB(t0 + gap);
+    await playA(t0);
+    await playB(t0 + gap);
   }
 
   #createNoiseBuffer() {
@@ -285,8 +292,8 @@ class AudioService {
   }
 
   // 播放成功音效 (使用玻璃柔音)
-  playSuccessSound() {
-    this.pair(
+  async playSuccessSound() {
+    await this.pair(
       this.soundConfigs.success.sA,
       this.soundConfigs.success.sB,
       this.soundConfigs.success.gap
@@ -294,18 +301,41 @@ class AudioService {
   }
 
   // 播放錯誤音效 (使用 Retro buzz down)
-  playErrorSound() {
-    this.pair(
+  async playErrorSound() {
+    await this.pair(
       this.soundConfigs.error.eA,
       this.soundConfigs.error.eB,
       this.soundConfigs.error.gap
     );
   }
 
-  // 播放重複音效 (保持原版)
-  playDuplicateSound() {
-    this.generateTone(500, 0.3, this.currentVolume);
-    setTimeout(() => this.generateTone(500, 0.3, this.currentVolume), 300);
+  // 播放 MP3 音效檔案
+  async playAudioFile(filePath) {
+    try {
+      const audio = new Audio(filePath);
+      audio.volume = this.currentVolume;
+
+      // 返回 Promise，等待播放完成
+      return new Promise((resolve, reject) => {
+        audio.onended = () => resolve();
+        audio.onerror = (error) => reject(error);
+        audio.play().catch(reject);
+      });
+    } catch (error) {
+      console.error("播放音效檔案失敗:", error);
+      throw error;
+    }
+  }
+
+  // 播放達成目標音效 (使用 MP3 檔案)
+  async playAchievementSound() {
+    try {
+      await this.playAudioFile("/achievement.mp3");
+    } catch (error) {
+      console.warn(
+        "找不到 achievement.mp3 檔案，請將慶祝音效檔案放在 public 資料夾中"
+      );
+    }
   }
 
   // 設定音量

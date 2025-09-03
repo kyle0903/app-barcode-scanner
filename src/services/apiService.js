@@ -116,4 +116,12 @@ export const apiService = {
       throw error;
     }
   },
+
+  // 獲取條碼詳細資料（所有上傳記錄和掃描歷史）
+  getBarcodeDetails: async (code) => {
+    const response = await api.get(
+      `/barcodes/details/${encodeURIComponent(code)}`
+    );
+    return response.data;
+  },
 };

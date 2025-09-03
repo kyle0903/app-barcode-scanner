@@ -3,8 +3,6 @@
  * 整合條碼快取和掃描記錄功能，用於在斷網時本地存儲掃描記錄，並在網路恢復時同步到伺服器
  */
 
-import { apiService } from "./apiService";
-
 class OfflineScanService {
   constructor() {
     this.storageKey = "offline_scan_records";
@@ -222,15 +220,7 @@ class OfflineScanService {
       };
     }
 
-    // 檢查是否已經掃描過
-    if (barcode.scan_count > 0) {
-      return {
-        result: "duplicate",
-        message: "⚠️ 收單已確認",
-        barcode_info: barcode,
-      };
-    }
-
+    // 不檢查重複，直接返回成功
     return {
       result: "success",
       message: "✅ 收單確認",
@@ -270,33 +260,6 @@ class OfflineScanService {
       notScanned: notScanned.length,
       initialized: this.initialized,
     };
-  }
-
-  // ==================== 網路狀態功能 ====================
-
-  /**
-   * 檢查網路狀態（瀏覽器層面）
-   */
-  isOnline() {
-    return navigator.onLine;
-  }
-
-  /**
-   * 檢查後端連接狀態
-   */
-  async checkBackendConnection() {
-    try {
-      // 嘗試發送一個簡單的請求到後端
-      const response = await apiService.healthCheck({
-        // 設定較短的超時時間
-        signal: AbortSignal.timeout(3000),
-      });
-
-      return response.status;
-    } catch (error) {
-      console.log("後端連接檢查失敗:", error.message);
-      return false;
-    }
   }
 }
 
