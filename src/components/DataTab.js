@@ -848,15 +848,17 @@ const DataTab = ({ barcodes, stats }) => {
             flexDirection: "column",
           }}
         >
-          <Pagination
-            count={totalPages}
-            page={currentPage}
-            onChange={handlePageChange}
-            color="primary"
-            size="medium"
-            showFirstButton
-            showLastButton
-          />
+          {filteredBarcodes.length > 0 && (
+            <Pagination
+              count={totalPages}
+              page={currentPage}
+              onChange={handlePageChange}
+              color="primary"
+              size="medium"
+              showFirstButton
+              showLastButton
+            />
+          )}
         </Box>
       </GlassContainer>
     </Box>

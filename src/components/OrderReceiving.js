@@ -4,9 +4,8 @@ import Header from "./Header";
 import UploadTab from "./UploadTab";
 import DataTab from "./DataTab";
 import { apiService } from "../services/apiService";
-import { audioService } from "../services/audioService";
 
-const BarcodeScanner = () => {
+const OrderReceiving = () => {
   const [activeKey, setActiveKey] = useState(0);
   const [stats, setStats] = useState({
     total_barcodes: 0,
@@ -43,8 +42,6 @@ const BarcodeScanner = () => {
 
   useEffect(() => {
     loadData();
-    // 初始化音效系統
-    audioService.init();
   }, [loadData]);
 
   const handleUploadSuccess = () => {
@@ -121,4 +118,4 @@ const BarcodeScanner = () => {
   );
 };
 
-export default BarcodeScanner;
+export default OrderReceiving;
