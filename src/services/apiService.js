@@ -68,8 +68,8 @@ export const apiService = {
   },
 
   // 獲取掃描歷史
-  getScanHistory: async (limit = 100) => {
-    const response = await api.get(`/scan-history?limit=${limit}`);
+  getScanHistory: async () => {
+    const response = await api.get(`/scan-history`);
     return response.data;
   },
 

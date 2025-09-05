@@ -5,6 +5,7 @@
 /.pnp
 .pnp.js
 /app-barcode-scanner/node_modules
+/app-barcode-scanner/build
 
 # testing
 /coverage

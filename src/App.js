@@ -8,6 +8,7 @@ import {
   Navigate,
 } from "react-router-dom";
 import OrderReceiving from "./components/OrderReceiving";
+import ScanPage from "./components/ScanPage";
 
 const theme = createTheme({
   palette: {
@@ -30,6 +31,7 @@ function App() {
       <Router>
         <Routes>
           <Route path="/" element={<OrderReceiving />} />
+          <Route path="/scan" element={<ScanPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Router>

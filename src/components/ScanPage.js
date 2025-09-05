@@ -7,22 +7,46 @@ import {
   Typography,
   Paper,
   Stack,
+  CircularProgress,
 } from "@mui/material";
 import { apiService } from "../services/apiService";
 import { audioService } from "../services/audioService";
 import { offlineScanService } from "../services/offlineScanService";
+import { wakeLockService } from "../services/wakeLockService";
 
 const ScanPage = () => {
   const [scanResult, setScanResult] = useState(null);
 
   const [scanHistory, setScanHistory] = useState([]);
   const [isOnline, setIsOnline] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [offlineStats, setOfflineStats] = useState({ total: 0, unsynced: 0 });
   const [barcodeStats, setBarcodeStats] = useState({
     total: 0,
     scanned: 0,
     notScanned: 0,
   });
+  const [hasPlayedAchievement, setHasPlayedAchievement] = useState(() => {
+    // 從 localStorage 讀取是否已播放過慶祝音效
+    try {
+      const saved = localStorage.getItem("hasPlayedAchievement");
+      return saved === "true";
+    } catch (error) {
+      return false;
+    }
+  });
+
+  // 保存慶祝音效播放狀態到 localStorage
+  const saveAchievementStatus = (status) => {
+    try {
+      localStorage.setItem("hasPlayedAchievement", status.toString());
+      setHasPlayedAchievement(status);
+    } catch (error) {
+      console.warn("保存慶祝音效狀態失敗:", error);
+      setHasPlayedAchievement(status);
+    }
+  };
 
   // 掃描器輸入緩衝區
   const scanBuffer = useRef("");
@@ -30,7 +54,7 @@ const ScanPage = () => {
 
   const loadScanHistory = useCallback(async () => {
     try {
-      const data = await apiService.getScanHistory(100);
+      const data = await apiService.getScanHistory();
       setScanHistory(data);
       // API成功時，設置為線上狀態
       setIsOnline(true);
@@ -38,6 +62,9 @@ const ScanPage = () => {
       console.error("載入掃描歷史失敗:", error);
       // API失敗時，設置為離線狀態
       setIsOnline(false);
+    } finally {
+      // 完成初始化
+      setIsInitializing(false);
     }
   }, []);
 
@@ -60,7 +87,7 @@ const ScanPage = () => {
     loadBarcodes();
   }, [loadScanHistory, loadBarcodes]);
 
-  // 更新離線統計
+  // 更新同步統計
   const updateOfflineStats = () => {
     const stats = offlineScanService.getStats();
     setOfflineStats(stats);
@@ -73,50 +100,68 @@ const ScanPage = () => {
   };
 
   // 同步離線記錄
-  const syncOfflineRecords = useCallback(async () => {
-    const unsyncedRecords = offlineScanService.getUnsyncedRecords();
-    if (unsyncedRecords.length === 0) {
-      console.log("沒有需要同步的記錄");
-      return;
-    }
+  const syncOfflineRecords = useCallback(
+    async (isManualTrigger = false) => {
+      const unsyncedRecords = offlineScanService.getUnsyncedRecords();
+      if (unsyncedRecords.length === 0) {
+        console.log("沒有需要同步的記錄");
+        return;
+      }
 
-    try {
-      console.log(`開始同步 ${unsyncedRecords.length} 條離線記錄`);
+      // 如果是手動觸發，設置同步中狀態
+      if (isManualTrigger) {
+        setIsSyncing(true);
+      }
 
-      // 準備同步資料
-      const recordsToSync = unsyncedRecords.map((record) => ({
-        barcode: record.barcode,
-        result: record.result,
-        message: record.message,
-        timestamp: record.timestamp,
-      }));
+      try {
+        console.log(`開始同步 ${unsyncedRecords.length} 條離線記錄`);
 
-      // 調用同步 API
-      const result = await apiService.syncOfflineRecords(recordsToSync);
-      console.log("同步結果:", result);
+        // 準備同步資料
+        const recordsToSync = unsyncedRecords.map((record) => ({
+          barcode: record.barcode,
+          result: record.result,
+          message: record.message,
+          timestamp: record.timestamp,
+        }));
 
-      // 同步成功，設置為線上狀態
-      setIsOnline(true);
+        // 調用同步 API
+        const result = await apiService.syncOfflineRecords(recordsToSync);
+        console.log("同步結果:", result);
 
-      // 標記為已同步
-      const syncedIds = unsyncedRecords.map((record) => record.id);
-      offlineScanService.markAsSynced(syncedIds);
+        // 同步成功，設置為線上狀態
+        setIsOnline(true);
 
-      // 清理已同步記錄
-      offlineScanService.cleanupSyncedRecords();
+        // 標記為已同步
+        const syncedIds = unsyncedRecords.map((record) => record.id);
+        offlineScanService.markAsSynced(syncedIds);
 
-      // 更新統計
-      updateOfflineStats();
+        // 清理已同步記錄
+        offlineScanService.cleanupSyncedRecords();
 
-      // 重新載入掃描歷史
-      loadScanHistory();
-      loadBarcodes();
-    } catch (error) {
-      console.error("同步離線記錄失敗:", error);
-      // 同步失敗時設置為離線狀態
-      setIsOnline(false);
-    }
-  }, [loadScanHistory, loadBarcodes]);
+        // 更新統計
+        updateOfflineStats();
+
+        // 重新載入掃描歷史
+        loadScanHistory();
+        loadBarcodes();
+      } catch (error) {
+        console.error("同步離線記錄失敗:", error);
+        // 同步失敗時設置為離線狀態
+        setIsOnline(false);
+
+        // 如果是手動觸發，顯示錯誤訊息
+        if (isManualTrigger) {
+          alert(`同步失敗：${"網路連線異常，請稍後再試"}`);
+        }
+      } finally {
+        // 如果是手動觸發，清除同步中狀態
+        if (isManualTrigger) {
+          setIsSyncing(false);
+        }
+      }
+    },
+    [loadScanHistory, loadBarcodes]
+  );
 
   // 處理掃描到的條碼
   const handleScannedCode = useCallback(
@@ -171,19 +216,18 @@ const ScanPage = () => {
         // 播放對應音效
         try {
           if (result.result === "success") {
-            // 檢查掃描進度是否達到100%
-            const currentStats = offlineScanService.getBarcodeCacheStats();
-            const progress =
-              currentStats.total > 0
-                ? (currentStats.scanned / currentStats.total) * 100
-                : 0;
+            // 先播放普通成功音效
+            await audioService.playSuccessSound();
 
-            if (progress >= 100) {
-              // 達成目標，播放特殊音效
+            const currentStats = offlineScanService.getBarcodeCacheStats();
+            const progress = (currentStats.scanned / currentStats.total) * 100;
+
+            // 檢查是否第一次達成 100% 且尚未播放過慶祝音效
+            if (progress >= 100 && hasPlayedAchievement == false) {
+              // 稍微延遲後播放慶祝音效
+              await new Promise((resolve) => setTimeout(resolve, 100));
               await audioService.playAchievementSound();
-            } else {
-              // 普通成功音效
-              await audioService.playSuccessSound();
+              saveAchievementStatus(true);
             }
           } else {
             await audioService.playErrorSound();
@@ -227,7 +271,7 @@ const ScanPage = () => {
         setTimeout(() => setScanResult(null), 2000);
       }
     },
-    [syncOfflineRecords]
+    [syncOfflineRecords, hasPlayedAchievement]
   );
 
   useEffect(() => {
@@ -237,15 +281,31 @@ const ScanPage = () => {
     // 設定音量為100%
     audioService.setVolume(1.0);
 
+    // 初始化螢幕長亮（預設啟用）
+    wakeLockService.init();
+
     // 更新同步統計
     updateOfflineStats();
 
     // 更新條碼統計
     updateBarcodeStats();
 
-    // 初始設定為離線狀態，等待第一次同步成功後再設為線上
-    setIsOnline(false);
+    // 清理函數
+    return () => {
+      wakeLockService.cleanup();
+    };
   }, [loadData]);
+
+  // 當條碼統計更新時，檢查是否需要重置慶祝狀態
+  useEffect(() => {
+    if (barcodeStats.total > 0) {
+      const progress = (barcodeStats.scanned / barcodeStats.total) * 100;
+      // 如果進度不到100%，重置慶祝狀態，讓下次達到100%時可以再次播放
+      if (progress < 100 && hasPlayedAchievement) {
+        saveAchievementStatus(false);
+      }
+    }
+  }, [barcodeStats, hasPlayedAchievement]);
 
   useEffect(() => {
     // 全域鍵盤事件監聽，用於處理掃描器輸入
@@ -288,22 +348,32 @@ const ScanPage = () => {
   return (
     <Box sx={{ minHeight: "100vh", backgroundColor: "#f5f5f5" }}>
       <Box sx={{ padding: "16px", maxWidth: "600px", margin: "0 auto" }}>
-        {/* 離線同步按鈕 - 只在離線狀態且有未同步記錄時顯示 */}
-        {!isOnline && offlineStats.unsynced > 0 && (
+        {/* 離線同步按鈕 - 只在初始化完成且離線狀態且有未同步記錄時顯示 */}
+        {!isInitializing && !isOnline && offlineStats.unsynced > 0 && (
           <Card sx={{ marginBottom: "16px" }}>
             <CardContent>
               <Box sx={{ textAlign: "center" }}>
                 <Button
-                  onClick={syncOfflineRecords}
+                  onClick={() => syncOfflineRecords(true)}
                   variant="contained"
                   color="primary"
                   size="large"
+                  disabled={isSyncing}
+                  startIcon={
+                    isSyncing ? (
+                      <CircularProgress size={20} color="inherit" />
+                    ) : null
+                  }
                   sx={{ marginBottom: 1 }}
                 >
-                  同步離線記錄 ({offlineStats.unsynced} 條)
+                  {isSyncing
+                    ? "同步中..."
+                    : `同步離線記錄 (${offlineStats.unsynced} 條)`}
                 </Button>
                 <Typography variant="body2" color="text.secondary">
-                  點擊同步本地記錄到伺服器
+                  {isSyncing
+                    ? "正在同步本地記錄到伺服器..."
+                    : "點擊同步本地記錄到伺服器"}
                 </Typography>
               </Box>
             </CardContent>

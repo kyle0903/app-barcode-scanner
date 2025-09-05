@@ -53,18 +53,18 @@ const UploadTab = ({ onUploadSuccess }) => {
       // 使用新的回傳格式
       setUploadResult({
         total: response.total,
-        added: response.added_count,
-        duplicates: response.duplicate_count,
+        newCount: response.new_count,
+        existingCount: response.existing_count,
         message: response.message,
-        addedBarcodes: response.added_barcodes || [],
-        duplicateBarcodes: response.duplicate_barcodes || [],
+        newBarcodes: response.new_barcodes || [],
+        existingBarcodes: response.existing_barcodes || [],
       });
 
       // 清空輸入框
       setManualBarcode("");
       onUploadSuccess();
       showNotification(
-        `上傳完成！新增 ${response.added_count} 筆，重複 ${response.duplicate_count} 筆`
+        `上傳完成！新增 ${response.new_count} 筆，重複 ${response.existing_count} 筆`
       );
     } catch (error) {
       showNotification("上傳失敗: " + error.message, "error");
@@ -165,7 +165,7 @@ const UploadTab = ({ onUploadSuccess }) => {
               </Paper>
               <Paper sx={{ padding: 2, backgroundColor: "#e8f5e8" }}>
                 <Typography variant="h4" color="success.main" fontWeight="bold">
-                  {uploadResult.added}
+                  {uploadResult.newCount}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   成功新增
@@ -173,7 +173,7 @@ const UploadTab = ({ onUploadSuccess }) => {
               </Paper>
               <Paper sx={{ padding: 2, backgroundColor: "#fff3e0" }}>
                 <Typography variant="h4" color="warning.main" fontWeight="bold">
-                  {uploadResult.duplicates}
+                  {uploadResult.existingCount}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   重複條碼
@@ -182,11 +182,11 @@ const UploadTab = ({ onUploadSuccess }) => {
             </Box>
 
             {/* 顯示具體的新增條碼 */}
-            {uploadResult.addedBarcodes &&
-              uploadResult.addedBarcodes.length > 0 && (
+            {uploadResult.newBarcodes &&
+              uploadResult.newBarcodes.length > 0 && (
                 <Box sx={{ marginBottom: 2 }}>
                   <Typography variant="h6" color="success.main" gutterBottom>
-                    新增的條碼 ({uploadResult.addedBarcodes.length} 個)
+                    新增的條碼 ({uploadResult.newBarcodes.length} 個)
                   </Typography>
                   <Paper
                     sx={{
@@ -202,7 +202,7 @@ const UploadTab = ({ onUploadSuccess }) => {
                       flexWrap="wrap"
                       useFlexGap
                     >
-                      {uploadResult.addedBarcodes.map((barcode, index) => (
+                      {uploadResult.newBarcodes.map((barcode, index) => (
                         <Chip
                           key={index}
                           label={barcode}
@@ -217,11 +217,11 @@ const UploadTab = ({ onUploadSuccess }) => {
               )}
 
             {/* 顯示具體的重複條碼 */}
-            {uploadResult.duplicateBarcodes &&
-              uploadResult.duplicateBarcodes.length > 0 && (
+            {uploadResult.existingBarcodes &&
+              uploadResult.existingBarcodes.length > 0 && (
                 <Box>
                   <Typography variant="h6" color="warning.main" gutterBottom>
-                    重複的條碼 ({uploadResult.duplicateBarcodes.length} 個)
+                    重複的條碼 ({uploadResult.existingBarcodes.length} 個)
                   </Typography>
                   <Paper
                     sx={{
@@ -237,7 +237,7 @@ const UploadTab = ({ onUploadSuccess }) => {
                       flexWrap="wrap"
                       useFlexGap
                     >
-                      {uploadResult.duplicateBarcodes.map((barcode, index) => (
+                      {uploadResult.existingBarcodes.map((barcode, index) => (
                         <Chip
                           key={index}
                           label={barcode}

@@ -599,9 +599,6 @@ const DataTab = ({ barcodes, stats }) => {
                     <strong>最新上傳時間</strong>
                   </TableCell>
                 )}
-                <TableCell>
-                  <strong>被掃描次數</strong>
-                </TableCell>
                 {!isTablet && (
                   <TableCell>
                     <strong>最後掃描時間</strong>
@@ -651,20 +648,6 @@ const DataTab = ({ barcodes, stats }) => {
                         </Typography>
                       </TableCell>
                     )}
-                    <TableCell>
-                      <Typography
-                        variant="body2"
-                        sx={{
-                          fontWeight: "bold",
-                          color:
-                            barcode.scan_count > 0
-                              ? "success.main"
-                              : "text.secondary",
-                        }}
-                      >
-                        {barcode.scan_count}
-                      </Typography>
-                    </TableCell>
                     {!isTablet && (
                       <TableCell>
                         <Typography variant="body2">
@@ -690,7 +673,7 @@ const DataTab = ({ barcodes, stats }) => {
                   {expandedRow === barcode.code && (
                     <TableRow>
                       <TableCell
-                        colSpan={6}
+                        colSpan={5}
                         sx={{
                           backgroundColor: "rgba(240, 245, 255, 0.8)",
                           padding: 3,
@@ -818,7 +801,7 @@ const DataTab = ({ barcodes, stats }) => {
               {currentBarcodes.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={isTablet ? 5 : 6}
+                    colSpan={5}
                     align="center"
                     sx={{ padding: "40px" }}
                   >

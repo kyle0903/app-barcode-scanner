@@ -1,9 +1,8 @@
 from fastapi import FastAPI, HTTPException, Depends, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import Column, Integer, String, DateTime, Float, create_engine
+from sqlalchemy import Column, Integer, String, DateTime, Float, create_engine, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy import func
 from pydantic import BaseModel
 from datetime import datetime, date
 from typing import List, Optional
@@ -118,14 +117,27 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # 資料庫模型
-class Barcode(Base):
-    __tablename__ = "barcodes"
+class BarcodesMaster(Base):
+    __tablename__ = "barcodes_master"
     
     id = Column(Integer, primary_key=True, index=True)
-    code = Column(String(100), nullable=False, index=True)
+    code = Column(String(100), nullable=False, unique=True, index=True)  # 唯一約束
+    total_scan_count = Column(Integer, default=0)  # 總掃描次數
+    last_scan_time = Column(DateTime)  # 最後掃描時間
+    first_upload_time = Column(DateTime)  # 第一次上傳時間
+    last_upload_time = Column(DateTime)  # 最後上傳時間
+    total_upload_count = Column(Integer, default=0)  # 總上傳次數
+    created_at = Column(DateTime, default=get_taipei_time)
+    updated_at = Column(DateTime, default=get_taipei_time, onupdate=get_taipei_time)
+
+class UploadRecord(Base):
+    __tablename__ = "upload_records"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(100), nullable=False, index=True)  # 允許重複
     upload_time = Column(DateTime, nullable=False, default=get_taipei_time)
-    scan_count = Column(Integer, default=0)
-    last_scan_time = Column(DateTime)
+    upload_batch_id = Column(String(50))  # 批次ID
+    created_at = Column(DateTime, default=get_taipei_time)
 
 class ScanHistory(Base):
     __tablename__ = "scan_history"
@@ -157,9 +169,20 @@ class BarcodeCreate(BaseModel):
 class BarcodeResponse(BaseModel):
     id: int
     code: str
-    upload_time: Optional[datetime]
-    scan_count: int
+    upload_time: Optional[datetime]  # 這裡對應 last_upload_time
+    scan_count: int  # 這裡對應 total_scan_count
     last_scan_time: Optional[datetime]
+    total_upload_count: Optional[int] = 0  # 新增總上傳次數
+    first_upload_time: Optional[datetime] = None  # 新增第一次上傳時間
+    
+    class Config:
+        from_attributes = True
+
+class UploadRecordResponse(BaseModel):
+    id: int
+    code: str
+    upload_time: datetime
+    upload_batch_id: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -250,23 +273,25 @@ def get_api_logs(limit: int = 100, db: Session = Depends(get_db)):
 # API 路由
 @app.get("/api/barcodes", response_model=List[BarcodeResponse])
 def get_barcodes(db: Session = Depends(get_db)):
-    """獲取所有條碼（每個條碼只顯示最新的記錄）"""
+    """獲取所有條碼（每個條碼只有一條主記錄）"""
     
+    # 直接從條碼主表獲取所有記錄
+    barcodes_master = db.query(BarcodesMaster).order_by(BarcodesMaster.last_upload_time.desc()).limit(500).all()
     
-    # 使用子查詢找出每個條碼的最新上傳時間
-    subquery = db.query(
-        Barcode.code,
-        func.max(Barcode.upload_time).label('latest_upload_time')
-    ).group_by(Barcode.code).subquery()
+    # 轉換為 BarcodeResponse 格式
+    result = []
+    for bm in barcodes_master:
+        result.append(BarcodeResponse(
+            id=bm.id,
+            code=bm.code,
+            upload_time=bm.last_upload_time,  # 顯示最後上傳時間
+            scan_count=bm.total_scan_count,
+            last_scan_time=bm.last_scan_time,
+            total_upload_count=bm.total_upload_count,
+            first_upload_time=bm.first_upload_time
+        ))
     
-    # 獲取每個條碼的最新記錄
-    barcodes = db.query(Barcode).join(
-        subquery,
-        (Barcode.code == subquery.c.code) & 
-        (Barcode.upload_time == subquery.c.latest_upload_time)
-    ).order_by(Barcode.upload_time.desc()).limit(500).all()
-    
-    return barcodes
+    return result
 
 @app.post("/api/barcodes/search", response_model=List[BarcodeResponse])
 def search_barcodes(search_request: BarcodeSearchRequest, db: Session = Depends(get_db)):
@@ -277,95 +302,141 @@ def search_barcodes(search_request: BarcodeSearchRequest, db: Session = Depends(
     # 移除空白和重複的條碼
     codes = list(set([code.strip() for code in search_request.codes if code.strip()]))
     
-    barcodes = db.query(Barcode).filter(Barcode.code.in_(codes)).all()
-    return barcodes
+    barcodes_master = db.query(BarcodesMaster).filter(BarcodesMaster.code.in_(codes)).all()
+    
+    # 轉換為 BarcodeResponse 格式
+    result = []
+    for bm in barcodes_master:
+        result.append(BarcodeResponse(
+            id=bm.id,
+            code=bm.code,
+            upload_time=bm.last_upload_time,
+            scan_count=bm.total_scan_count,
+            last_scan_time=bm.last_scan_time,
+            total_upload_count=bm.total_upload_count,
+            first_upload_time=bm.first_upload_time
+        ))
+    
+    return result
 
 @app.post("/api/barcodes/date-range", response_model=List[BarcodeResponse])
 def get_barcodes_by_date_range(date_request: DateRangeRequest, db: Session = Depends(get_db)):
-    """依日期範圍查詢條碼"""
-    query = db.query(Barcode)
+    """依日期範圍查詢條碼（從主表查詢）"""
+    query = db.query(BarcodesMaster)
     
     if date_request.start_date:
         # 將日期轉換為該日的開始時間
         start_datetime = datetime.combine(date_request.start_date, datetime.min.time())
         start_datetime = TAIPEI_TZ.localize(start_datetime)
-        query = query.filter(Barcode.upload_time >= start_datetime)
+        query = query.filter(BarcodesMaster.last_upload_time >= start_datetime)
     
     if date_request.end_date:
         # 將日期轉換為該日的結束時間
         end_datetime = datetime.combine(date_request.end_date, datetime.max.time())
         end_datetime = TAIPEI_TZ.localize(end_datetime)
-        query = query.filter(Barcode.upload_time <= end_datetime)
+        query = query.filter(BarcodesMaster.last_upload_time <= end_datetime)
     
-    barcodes = query.order_by(Barcode.upload_time.desc()).all()
-    return barcodes
-
-@app.post("/api/barcodes", response_model=BarcodeResponse)
-def add_barcode(barcode_data: BarcodeCreate, db: Session = Depends(get_db)):
-    """新增條碼"""
-    # 檢查條碼是否已存在
-    existing = db.query(Barcode).filter(Barcode.code == barcode_data.code).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="條碼已存在")
+    barcodes_master = query.order_by(BarcodesMaster.last_upload_time.desc()).all()
     
-    barcode = Barcode(code=barcode_data.code)
-    db.add(barcode)
-    db.commit()
-    db.refresh(barcode)
+    # 轉換為 BarcodeResponse 格式
+    result = []
+    for bm in barcodes_master:
+        result.append(BarcodeResponse(
+            id=bm.id,
+            code=bm.code,
+            upload_time=bm.last_upload_time,
+            scan_count=bm.total_scan_count,
+            last_scan_time=bm.last_scan_time,
+            total_upload_count=bm.total_upload_count,
+            first_upload_time=bm.first_upload_time
+        ))
     
-    return barcode
+    return result
 
 @app.post("/api/barcodes/bulk")
 def upload_barcodes(barcodes_data: BarcodesBulkCreate, db: Session = Depends(get_db)):
-    """批量上傳條碼"""
+    """批量上傳條碼 - 新的邏輯支援重複條碼上傳"""
     if not barcodes_data.codes:
         raise HTTPException(status_code=400, detail="沒有提供條碼")
     
-    added_barcodes = []
-    duplicate_barcodes = []
+    new_barcodes = []  # 全新的條碼
+    existing_barcodes = []  # 已存在的條碼
+    current_time = get_taipei_time()
+    
+    # 生成批次ID
+    import uuid
+    batch_id = str(uuid.uuid4())[:8]
     
     for code in barcodes_data.codes:
-        if code and not db.query(Barcode).filter(Barcode.code == code).first():
-            added_barcodes.append(code)
+        if not code.strip():
+            continue
+            
+        code = code.strip()
+        
+        # 檢查條碼是否已存在於主表
+        existing_master = db.query(BarcodesMaster).filter(BarcodesMaster.code == code).first()
+        
+        if existing_master:
+            existing_barcodes.append(code)
         else:
-            duplicate_barcodes.append(code)
-        barcode = Barcode(code=code)
-        db.add(barcode)
+            new_barcodes.append(code)
+        
+        # 無論是否重複，都要記錄上傳記錄
+        upload_record = UploadRecord(
+            code=code,
+            upload_time=current_time,
+            upload_batch_id=batch_id
+        )
+        db.add(upload_record)
     
+    # 提交所有上傳記錄（觸發器會自動更新主表）
     db.commit()
     
-    # 構建詳細的訊息
-    total_count = len(barcodes_data.codes)
-    added_count = len(added_barcodes)
-    duplicate_count = len(duplicate_barcodes)
+    # 構建回傳訊息
+    total_count = len([c for c in barcodes_data.codes if c.strip()])
+    new_count = len(new_barcodes)
+    existing_count = len(existing_barcodes)
     
-    message = f"上傳完成！總共 {total_count} 個條碼，成功新增 {added_count} 個條碼，重複 {duplicate_count} 個條碼"
+    message = f"上傳完成！總共 {total_count} 個條碼，全新 {new_count} 個，已存在 {existing_count} 個"
     
     return {
         "message": message,
         "total": total_count,
-        "added_count": added_count,
-        "duplicate_count": duplicate_count,
-        "added_barcodes": added_barcodes,
-        "duplicate_barcodes": duplicate_barcodes
+        "new_count": new_count,
+        "existing_count": existing_count,
+        "new_barcodes": new_barcodes,
+        "existing_barcodes": existing_barcodes,
+        "batch_id": batch_id
     }
 
 @app.delete("/api/barcodes/id/{barcode_id}", response_model=MessageResponse)
 def delete_barcode(barcode_id: int, db: Session = Depends(get_db)):
-    """刪除條碼"""
-    barcode = db.query(Barcode).filter(Barcode.id == barcode_id).first()
-    if not barcode:
+    """刪除條碼（刪除主表記錄和所有相關上傳記錄）"""
+    barcode_master = db.query(BarcodesMaster).filter(BarcodesMaster.id == barcode_id).first()
+    if not barcode_master:
         raise HTTPException(status_code=404, detail="條碼不存在")
     
-    db.delete(barcode)
+    code = barcode_master.code
+    
+    # 刪除所有相關的上傳記錄
+    db.query(UploadRecord).filter(UploadRecord.code == code).delete()
+    
+    # 刪除主表記錄
+    db.delete(barcode_master)
+    
+    # 刪除掃描歷史
+    db.query(ScanHistory).filter(ScanHistory.barcode == code).delete()
+    
     db.commit()
     
-    return MessageResponse(message="條碼已刪除")
+    return MessageResponse(message=f"條碼 {code} 及其所有相關記錄已刪除")
 
 @app.delete("/api/barcodes/clear", response_model=MessageResponse)
 def clear_all_barcodes(db: Session = Depends(get_db)):
-    """清空所有條碼"""
-    db.query(Barcode).delete()
+    """清空所有條碼資料"""
+    # 清空所有表的資料
+    db.query(UploadRecord).delete()
+    db.query(BarcodesMaster).delete()
     db.query(ScanHistory).delete()
     db.commit()
     
@@ -373,8 +444,8 @@ def clear_all_barcodes(db: Session = Depends(get_db)):
 
 @app.post("/api/scan", response_model=ScanResponse)
 def scan_barcode(scan_data: ScanRequest, db: Session = Depends(get_db)):
-    """掃描條碼驗證"""
-    code = scan_data.code
+    """掃描條碼驗證 - 新的邏輯解決重複條碼掃描計數問題"""
+    code = scan_data.code.strip()
     current_timestamp = time.time()
     
     # 清理過期記錄
@@ -394,16 +465,17 @@ def scan_barcode(scan_data: ScanRequest, db: Session = Depends(get_db)):
     recent_scans[code] = current_timestamp
     
     try:
-        # 直接查詢資料庫檢查條碼是否存在
-        barcode = db.query(Barcode).filter(Barcode.code == code).first()
+        # 查詢條碼主表檢查條碼是否存在
+        barcode_master = db.query(BarcodesMaster).filter(BarcodesMaster.code == code).first()
         
-        if barcode:
-            # 條碼存在，直接確認收單（不檢查重複）
+        if barcode_master:
+            # 條碼存在，確認收單
             current_time = get_taipei_time()
             
-            # 原子操作：更新掃描次數和時間
-            barcode.scan_count += 1
-            barcode.last_scan_time = current_time
+            # 原子操作：更新掃描次數和時間（整個系統只有一條記錄）
+            barcode_master.total_scan_count += 1
+            barcode_master.last_scan_time = current_time
+            barcode_master.updated_at = current_time
             
             # 記錄掃描歷史
             scan = ScanHistory(barcode=code, result='success', timestamp=current_time)
@@ -415,7 +487,7 @@ def scan_barcode(scan_data: ScanRequest, db: Session = Depends(get_db)):
                 result="success",
                 message="✅ 收單確認",
                 barcode=code,
-                scan_count=barcode.scan_count
+                scan_count=barcode_master.total_scan_count
             )
             
         else:
@@ -438,18 +510,24 @@ def scan_barcode(scan_data: ScanRequest, db: Session = Depends(get_db)):
 
 @app.get("/api/scan-history", response_model=List[ScanHistoryResponse])
 def get_scan_history(limit: int = 10, db: Session = Depends(get_db)):
-    """獲取掃描歷史"""
-    history = db.query(ScanHistory).order_by(ScanHistory.timestamp.desc()).limit(limit).all()
+    """獲取今日掃描歷史"""
+    today = datetime.now().date()
+    # 使用 func.date() 來提取日期部分進行比較
+    history = db.query(ScanHistory).filter(func.date(ScanHistory.timestamp) == today).order_by(ScanHistory.timestamp.desc()).limit(limit).all()
     return history
 
 @app.get("/api/stats", response_model=StatsResponse)
 def get_stats(db: Session = Depends(get_db)):
     """獲取統計資料"""
-    total_barcodes = db.query(Barcode.code).distinct().count()
+    # 總條碼數（從主表獲取）
+    total_barcodes = db.query(BarcodesMaster).count()
+    
     # 計算不重複的成功掃描條碼數量
     successful_scans = db.query(ScanHistory.barcode).filter(
         ScanHistory.result == 'success'
     ).distinct().count()
+    
+    # 失敗掃描次數
     failed_scans = db.query(ScanHistory).filter(ScanHistory.result == 'error').count()
     
     return StatsResponse(
@@ -468,28 +546,24 @@ def download_excel(data: DownloadExcelRequest, db: Session = Depends(get_db)):
         if not download_data:
             raise HTTPException(status_code=400, detail="沒有資料可下載")
         
-        print(f"開始處理下載請求，共 {len(download_data)} 筆資料")
-        
         # 準備主要條碼資料
         main_dict_list = [item.model_dump() for item in download_data]
         main_df = pd.DataFrame(main_dict_list)
-        
-        print(f"主要資料DataFrame創建完成，形狀: {main_df.shape}")
         
         # 重新命名欄位為中文
         main_df = main_df.rename(columns={
             'code': '條碼',
             'upload_time': '最新上傳時間',
+            'last_scan_time': '最後掃描時間',
+            'first_upload_time': '第一次上傳時間',
+            'total_upload_count': '總上傳次數',
             'scan_count': '掃描次數',
-            'last_scan_time': '最後掃描時間'
         })
         
         # 處理datetime欄位，確保它們可以正確序列化
         for col in ['最新上傳時間', '最後掃描時間']:
             if col in main_df.columns:
                 main_df[col] = main_df[col].astype(str)
-        
-        print(f"主要資料處理完成，欄位: {list(main_df.columns)}")
         
         # 準備詳細資料工作表
         upload_records_data = []
@@ -500,16 +574,15 @@ def download_excel(data: DownloadExcelRequest, db: Session = Depends(get_db)):
             code = barcode_item.code
             
             # 獲取所有上傳記錄
-            upload_records = db.query(Barcode).filter(
-                Barcode.code == code
-            ).order_by(Barcode.upload_time.desc()).all()
+            upload_records = db.query(UploadRecord).filter(
+                UploadRecord.code == code
+            ).order_by(UploadRecord.upload_time.desc()).all()
             
             for record in upload_records:
                 upload_records_data.append({
                     '條碼': code,
-                    '最新上傳時間': record.upload_time,
-                    '掃描次數': record.scan_count,
-                    '最後掃描時間': record.last_scan_time
+                    '上傳時間': record.upload_time,
+                    '批次ID': record.upload_batch_id
                 })
             
             # 獲取掃描歷史
@@ -528,9 +601,6 @@ def download_excel(data: DownloadExcelRequest, db: Session = Depends(get_db)):
         upload_records_df = pd.DataFrame(upload_records_data)
         scan_history_df = pd.DataFrame(scan_history_data)
         
-        print(f"上傳記錄資料: {len(upload_records_data)} 筆")
-        print(f"掃描歷史資料: {len(scan_history_data)} 筆")
-        
         # 處理datetime欄位
         if not upload_records_df.empty:
             for col in ['最新上傳時間', '最後掃描時間']:
@@ -543,26 +613,18 @@ def download_excel(data: DownloadExcelRequest, db: Session = Depends(get_db)):
         
         # 使用ExcelWriter創建多個工作表
         output = BytesIO()
-        print("開始創建Excel檔案...")
         
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             # 主要條碼資料工作表
-            print("寫入主要條碼資料工作表...")
             main_df.to_excel(writer, sheet_name='條碼資料', index=False)
             
             # 上傳記錄詳細資料工作表
             if not upload_records_df.empty:
-                print("寫入上傳記錄詳細工作表...")
                 upload_records_df.to_excel(writer, sheet_name='上傳記錄詳細', index=False)
-            else:
-                print("上傳記錄為空，跳過該工作表")
             
             # 掃描歷史詳細資料工作表
             if not scan_history_df.empty:
-                print("寫入掃描歷史詳細工作表...")
                 scan_history_df.to_excel(writer, sheet_name='掃描歷史詳細', index=False)
-            else:
-                print("掃描歷史為空，跳過該工作表")
             
             # 調整欄位寬度以便閱讀
             for sheet_name in writer.sheets:
@@ -633,17 +695,17 @@ def sync_offline_records(sync_request: OfflineSyncRequest, db: Session = Depends
                 )
                 db.add(scan_history)
                 
-                # 如果是成功掃描，更新條碼的掃描次數
+                # 如果是成功掃描，更新條碼主表的掃描次數
                 if record.result == 'success':
-                    barcode = db.query(Barcode).filter(Barcode.code == record.barcode).first()
-                    if barcode:
-                        barcode.scan_count += 1
-                        barcode.last_scan_time = timestamp
+                    barcode_master = db.query(BarcodesMaster).filter(BarcodesMaster.code == record.barcode).first()
+                    if barcode_master:
+                        barcode_master.total_scan_count += 1
+                        barcode_master.last_scan_time = timestamp
+                        barcode_master.updated_at = timestamp
                 
                 synced_count += 1
                 
             except Exception as e:
-                print(f"同步記錄失敗: {record.barcode}, 錯誤: {e}")
                 error_count += 1
                 continue
         
@@ -663,13 +725,16 @@ def sync_offline_records(sync_request: OfflineSyncRequest, db: Session = Depends
 def get_barcode_details(code: str, db: Session = Depends(get_db)):
     """獲取指定條碼的所有上傳記錄和掃描歷史"""
     try:
-        # 獲取所有相同條碼的上傳記錄（按最新上傳時間排序）
-        upload_records = db.query(Barcode).filter(
-            Barcode.code == code
-        ).order_by(Barcode.upload_time.desc()).all()
+        # 獲取條碼主表記錄
+        barcode_master = db.query(BarcodesMaster).filter(BarcodesMaster.code == code).first()
         
-        if not upload_records:
+        if not barcode_master:
             raise HTTPException(status_code=404, detail="條碼不存在")
+        
+        # 獲取所有上傳記錄（按上傳時間排序）
+        upload_records = db.query(UploadRecord).filter(
+            UploadRecord.code == code
+        ).order_by(UploadRecord.upload_time.desc()).all()
         
         # 獲取掃描歷史（按掃描時間排序）
         scan_history = db.query(ScanHistory).filter(
@@ -678,12 +743,21 @@ def get_barcode_details(code: str, db: Session = Depends(get_db)):
         
         return {
             "code": code,
+            "master_record": {
+                "id": barcode_master.id,
+                "total_scan_count": barcode_master.total_scan_count,
+                "last_scan_time": barcode_master.last_scan_time,
+                "first_upload_time": barcode_master.first_upload_time,
+                "last_upload_time": barcode_master.last_upload_time,
+                "total_upload_count": barcode_master.total_upload_count,
+                "created_at": barcode_master.created_at,
+                "updated_at": barcode_master.updated_at
+            },
             "upload_records": [
                 {
                     "id": record.id,
                     "upload_time": record.upload_time,
-                    "scan_count": record.scan_count,
-                    "last_scan_time": record.last_scan_time
+                    "upload_batch_id": record.upload_batch_id,
                 } for record in upload_records
             ],
             "scan_history": [
