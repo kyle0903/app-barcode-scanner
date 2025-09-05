@@ -135,6 +135,31 @@ class OfflineScanService {
   }
 
   /**
+   * 獲取今日的掃描記錄（格式化為與 API 相同）
+   * @returns {Array} 今日掃描記錄陣列
+   */
+  getTodayRecords() {
+    const offlineRecords = this.getOfflineRecords();
+
+    // 轉換離線記錄格式為與 API 相同的格式，只顯示今天的記錄
+    return offlineRecords
+      .filter((record) => {
+        // 只顯示今天的記錄
+        const today = new Date().toDateString();
+        const recordDate = new Date(record.timestamp).toDateString();
+        return recordDate === today;
+      })
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)) // 最新的在前
+      .map((record) => ({
+        barcode: record.barcode,
+        result: record.result,
+        message: record.message,
+        timestamp: record.timestamp,
+        barcode_info: record.barcode_info,
+      }));
+  }
+
+  /**
    * 清空所有記錄
    */
   clearAllRecords() {

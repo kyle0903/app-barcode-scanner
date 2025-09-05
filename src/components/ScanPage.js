@@ -60,8 +60,12 @@ const ScanPage = () => {
       setIsOnline(true);
     } catch (error) {
       console.error("載入掃描歷史失敗:", error);
-      // API失敗時，設置為離線狀態
+      // API失敗時，設置為離線狀態並使用本地記錄
       setIsOnline(false);
+
+      // 使用本地離線記錄作為備用
+      updateLocalHistory();
+      console.log(`使用本地記錄顯示今日掃描歷史`);
     } finally {
       // 完成初始化
       setIsInitializing(false);
@@ -97,6 +101,12 @@ const ScanPage = () => {
   const updateBarcodeStats = () => {
     const stats = offlineScanService.getBarcodeCacheStats();
     setBarcodeStats(stats);
+  };
+
+  // 更新本地歷史記錄（用於離線狀態）
+  const updateLocalHistory = () => {
+    const localHistory = offlineScanService.getTodayRecords();
+    setScanHistory(localHistory);
   };
 
   // 同步離線記錄
@@ -246,6 +256,11 @@ const ScanPage = () => {
         };
         offlineScanService.addScanRecord(scanRecord);
         updateOfflineStats();
+
+        // 如果是離線狀態，立即更新本地歷史記錄顯示
+        if (!isOnline) {
+          updateLocalHistory();
+        }
 
         // 嘗試異步同步，不等待結果，並更新線上狀態
         syncOfflineRecords().catch((error) => {
@@ -526,7 +541,7 @@ const ScanPage = () => {
         <Card>
           <CardContent>
             <Typography variant="h6" component="h4" gutterBottom>
-              最近掃描記錄
+              今日掃描記錄
             </Typography>
             {scanHistory.length === 0 ? (
               <Typography

@@ -509,11 +509,11 @@ def scan_barcode(scan_data: ScanRequest, db: Session = Depends(get_db)):
         raise e
 
 @app.get("/api/scan-history", response_model=List[ScanHistoryResponse])
-def get_scan_history(limit: int = 10, db: Session = Depends(get_db)):
+def get_scan_history(db: Session = Depends(get_db)):
     """獲取今日掃描歷史"""
     today = datetime.now().date()
     # 使用 func.date() 來提取日期部分進行比較
-    history = db.query(ScanHistory).filter(func.date(ScanHistory.timestamp) == today).order_by(ScanHistory.timestamp.desc()).limit(limit).all()
+    history = db.query(ScanHistory).filter(func.date(ScanHistory.timestamp) == today).order_by(ScanHistory.timestamp.desc()).all()
     return history
 
 @app.get("/api/stats", response_model=StatsResponse)
