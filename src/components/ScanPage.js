@@ -8,11 +8,13 @@ import {
   Paper,
   Stack,
   CircularProgress,
+  Switch,
+  FormControlLabel,
 } from "@mui/material";
 import { apiService } from "../services/apiService";
 import { audioService } from "../services/audioService";
 import { offlineScanService } from "../services/offlineScanService";
-import { wakeLockService } from "../services/wakeLockService";
+import { wakeLockService } from "../services/wakeLockCore";
 
 const ScanPage = () => {
   const [scanResult, setScanResult] = useState(null);
@@ -36,6 +38,15 @@ const ScanPage = () => {
       return false;
     }
   });
+  const [wakeLockEnabled, setWakeLockEnabled] = useState(() => {
+    // 從 localStorage 讀取螢幕長亮設定，預設為 true
+    try {
+      const saved = localStorage.getItem("wakeLockEnabled");
+      return saved !== "false"; // 預設為 true，除非明確設為 false
+    } catch (error) {
+      return true;
+    }
+  });
 
   // 保存慶祝音效播放狀態到 localStorage
   const saveAchievementStatus = (status) => {
@@ -45,6 +56,29 @@ const ScanPage = () => {
     } catch (error) {
       console.warn("保存慶祝音效狀態失敗:", error);
       setHasPlayedAchievement(status);
+    }
+  };
+
+  // 保存螢幕長亮設定到 localStorage
+  const saveWakeLockSetting = (enabled) => {
+    try {
+      localStorage.setItem("wakeLockEnabled", enabled.toString());
+      setWakeLockEnabled(enabled);
+    } catch (error) {
+      console.warn("保存螢幕長亮設定失敗:", error);
+      setWakeLockEnabled(enabled);
+    }
+  };
+
+  // 處理螢幕長亮開關切換
+  const handleWakeLockToggle = async (event) => {
+    const enabled = event.target.checked;
+    saveWakeLockSetting(enabled);
+
+    if (enabled) {
+      await wakeLockService.enable();
+    } else {
+      await wakeLockService.disable();
     }
   };
 
@@ -286,7 +320,7 @@ const ScanPage = () => {
         setTimeout(() => setScanResult(null), 2000);
       }
     },
-    [syncOfflineRecords, hasPlayedAchievement]
+    [syncOfflineRecords, hasPlayedAchievement, isOnline]
   );
 
   useEffect(() => {
@@ -296,8 +330,15 @@ const ScanPage = () => {
     // 設定音量為100%
     audioService.setVolume(1.0);
 
-    // 初始化螢幕長亮（預設啟用）
+    // 初始化螢幕長亮服務
     wakeLockService.init();
+
+    // 根據設定啟用或禁用螢幕長亮
+    if (wakeLockEnabled) {
+      wakeLockService.enable();
+    } else {
+      wakeLockService.disable();
+    }
 
     // 更新同步統計
     updateOfflineStats();
@@ -394,6 +435,40 @@ const ScanPage = () => {
             </CardContent>
           </Card>
         )}
+
+        {/* 螢幕長亮設定 */}
+        <Card sx={{ marginBottom: "16px" }}>
+          <CardContent>
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <Box>
+                <Typography variant="h6" component="h4" gutterBottom>
+                  螢幕設定
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  防止螢幕進入休眠狀態，方便掃描作業
+                </Typography>
+              </Box>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={wakeLockEnabled}
+                    onChange={handleWakeLockToggle}
+                    color="primary"
+                    size="medium"
+                  />
+                }
+                label={wakeLockEnabled ? "螢幕長亮已啟用" : "螢幕長亮已關閉"}
+                labelPlacement="start"
+              />
+            </Box>
+          </CardContent>
+        </Card>
 
         {/* 條碼統計 */}
         <Card sx={{ marginBottom: "16px" }}>
