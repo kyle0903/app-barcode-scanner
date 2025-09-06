@@ -409,28 +409,6 @@ def upload_barcodes(barcodes_data: BarcodesBulkCreate, db: Session = Depends(get
         "batch_id": batch_id
     }
 
-@app.delete("/api/barcodes/id/{barcode_id}", response_model=MessageResponse)
-def delete_barcode(barcode_id: int, db: Session = Depends(get_db)):
-    """刪除條碼（刪除主表記錄和所有相關上傳記錄）"""
-    barcode_master = db.query(BarcodesMaster).filter(BarcodesMaster.id == barcode_id).first()
-    if not barcode_master:
-        raise HTTPException(status_code=404, detail="條碼不存在")
-    
-    code = barcode_master.code
-    
-    # 刪除所有相關的上傳記錄
-    db.query(UploadRecord).filter(UploadRecord.code == code).delete()
-    
-    # 刪除主表記錄
-    db.delete(barcode_master)
-    
-    # 刪除掃描歷史
-    db.query(ScanHistory).filter(ScanHistory.barcode == code).delete()
-    
-    db.commit()
-    
-    return MessageResponse(message=f"條碼 {code} 及其所有相關記錄已刪除")
-
 @app.delete("/api/barcodes/clear", response_model=MessageResponse)
 def clear_all_barcodes(db: Session = Depends(get_db)):
     """清空所有條碼資料"""
